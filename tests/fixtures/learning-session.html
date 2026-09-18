@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ScholarsEye · Local Learning Fixture</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #182836; background: #f2f5f6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { padding: 26px max(28px, calc((100vw - 1160px) / 2)); background: #173e46; color: #fff; }
+    .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    header .eyebrow { color: #b8e2d8; }
+    h1 { font-size: clamp(25px, 3vw, 36px); letter-spacing: -.035em; margin: 9px 0; }
+    header p { margin: 0; color: #dbe8e8; font-size: 14px; line-height: 1.55; }
+    main { max-width: 1160px; margin: 26px auto; padding: 0 28px; }
+    .controls { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+    button { border: 1px solid #cedbdd; border-radius: 8px; color: #294b53; background: #fff; font: inherit; font-size: 14px; font-weight: 600; padding: 12px 20px; cursor: pointer; }
+    button[aria-pressed="true"] { color: #fff; background: #23645e; border-color: #23645e; }
+    button:hover { box-shadow: 0 2px 8px #123b4519; }
+    button:focus-visible, textarea:focus-visible { outline: 3px solid #efa957; outline-offset: 3px; }
+    .layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(230px, 1fr); gap: 20px; align-items: start; }
+    article, aside { border: 1px solid #dce4e6; background: #fff; border-radius: 12px; padding: 26px; box-shadow: 0 4px 16px #153c4206; }
+    h2 { margin: 8px 0 16px; font-size: 25px; letter-spacing: -.025em; }
+    h3 { font-size: 17px; margin: 23px 0 10px; }
+    p, li { font-size: 15px; line-height: 1.65; }
+    p { margin: 10px 0; }
+    .section-label { color: #34756c; }
+    pre { padding: 16px 18px; background: #f0f5f6; border: 1px solid #dce7e9; border-radius: 8px; overflow-x: auto; font-size: 14px; line-height: 1.6; color: #193d4a; }
+    code { font-family: "SFMono-Regular", Menlo, Consolas, monospace; }
+    p code { font-size: .9em; background: #eef4f4; padding: 2px 4px; border-radius: 3px; }
+    .math { font-family: Georgia, "Times New Roman", serif; font-size: 18px; line-height: 1.7; padding: 14px 18px; background: #fbf8f0; border-left: 3px solid #d7b46b; }
+    .fine-detail { font-size: 12px; line-height: 1.7; color: #536871; }
+    .matrix { display: inline-grid; grid-template-columns: repeat(2, 1.4em); gap: .15em .6em; border-left: 1px solid currentColor; border-right: 1px solid currentColor; padding: .15em .4em; margin: 0 .35em; vertical-align: middle; text-align: center; }
+    .matrix span { line-height: 1.2; }
+    .answer { border: 1px solid #b9d8c9; background: #f0f8f3; border-radius: 8px; padding: 13px 16px; }
+    aside h2 { font-size: 18px; margin-top: 0; }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 20px 0 8px; }
+    textarea { width: 100%; min-height: 210px; resize: vertical; border: 1px solid #bacdd0; border-radius: 8px; padding: 12px; font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #193742; background: #fcfefe; }
+    .status { color: #52706f; font-size: 12px; margin-top: 8px; min-height: 19px; }
+    footer { color: #65797d; font-size: 12px; line-height: 1.7; margin: 20px 0 35px; }
+    [hidden] { display: none !important; }
+    @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } main { padding: 0 18px; } article, aside { padding: 20px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="eyebrow">ScholarsEye · Fixture / Test only</div>
+    <h1>A short learning session</h1>
+    <p>Local test material for checking screen readability, spoken reasoning, and recording continuity.</p>
+  </header>
+  <main>
+    <nav class="controls" aria-label="Learning session steps">
+      <button type="button" data-step="lesson" aria-pressed="true" aria-controls="lesson">1 · Lesson</button>
+      <button type="button" data-step="problem" aria-pressed="false" aria-controls="problem">2 · Problem</button>
+      <button type="button" data-step="solution" aria-pressed="false" aria-controls="solution">3 · Solution</button>
+    </nav>
+    <div class="layout">
+      <article>
+        <section id="lesson" aria-labelledby="lesson-title">
+          <div class="eyebrow section-label">Read &amp; explain aloud</div>
+          <h2 id="lesson-title">Names now, values later</h2>
+          <p>A Python closure reads its captured variable when the function runs. Creating several functions in the same loop does not automatically freeze a different value for each one.</p>
+          <pre><code>functions = [lambda: i for i in range(3)]
+result = [function() for function in functions]
+print(result)</code></pre>
+          <p>Before running the functions, ask yourself: <strong>which binding does each function read?</strong></p>
+          <h3>A second idea: matrix multiplication</h3>
+          <p>Each entry combines a row from the first matrix with a column from the second.</p>
+          <div class="math" aria-label="C sub i j equals sum from k equals 1 to 2 of A sub i k times B sub k j">
+            C<sub>ij</sub> = ∑<sub>k=1</sub><sup>2</sup> A<sub>ik</sub>B<sub>kj</sub>
+          </div>
+          <p class="fine-detail">Fine-detail capture check: x<sub>n+1</sub> = x<sub>n</sub> − η∇f(x<sub>n</sub>), η = 0.01. Subscripts, the minus sign, and the decimal point should remain legible in saved footage.</p>
+        </section>
+        <section id="problem" aria-labelledby="problem-title" hidden>
+          <div class="eyebrow section-label">Try before revealing</div>
+          <h2 id="problem-title">Predict, then calculate</h2>
+          <h3>1. Predict the Python output</h3>
+          <pre><code>functions = [lambda: i for i in range(3)]
+print([function() for function in functions])</code></pre>
+          <p>Type the output in your notes. Explain why you chose it, then suggest one change that produces <code>[0, 1, 2]</code>.</p>
+          <h3>2. Calculate C = AB</h3>
+          <div class="math">
+            A = <span class="matrix" aria-label="matrix A: row one 1, 2; row two 3, 4"><span>1</span><span>2</span><span>3</span><span>4</span></span>
+            B = <span class="matrix" aria-label="matrix B: row one 2, 0; row two 1, 2"><span>2</span><span>0</span><span>1</span><span>2</span></span>
+          </div>
+          <p>Find C<sub>12</sub> first, then write the full product. Describe the row and column you used.</p>
+          <p class="fine-detail">Leave this screen unchanged for a short reading/thinking interval. A still screen does not mean the learner is absent.</p>
+        </section>
+        <section id="solution" aria-labelledby="solution-title" hidden>
+          <div class="eyebrow section-label">Compare &amp; correct</div>
+          <h2 id="solution-title">Check your reasoning</h2>
+          <div class="answer"><strong>Original Python output: <code>[2, 2, 2]</code></strong></div>
+          <p>All three functions read the same captured <code>i</code>. After the comprehension finishes, that binding holds <code>2</code>. Bind a default argument when each function is created to retain its current value:</p>
+          <pre><code>functions = [lambda i=i: i for i in range(3)]
+print([function() for function in functions])
+# [0, 1, 2]</code></pre>
+          <h3>Matrix result</h3>
+          <div class="math">
+            C<sub>12</sub> = 1 × 0 + 2 × 2 = <strong>4</strong><br>
+            AB = <span class="matrix" aria-label="product matrix: row one 4, 4; row two 10, 8"><span>4</span><span>4</span><span>10</span><span>8</span></span>
+          </div>
+          <p>Each entry uses one complete row and one complete column. This is different from multiplying entries in matching positions.</p>
+          <p class="fine-detail">End marker: LAMBDA-224 · MATRIX-44108. These markers help locate the solution in saved recording playback.</p>
+        </section>
+      </article>
+      <aside>
+        <h2>Think out loud</h2>
+        <p>Explain what you expect, what confused you, and what changed after seeing the solution.</p>
+        <label for="notes">Session notes</label>
+        <textarea id="notes" placeholder="My prediction is…&#10;The part I am unsure about is…" spellcheck="false"></textarea>
+        <div id="notes-status" class="status" aria-live="polite">Notes stay on this page until reload.</div>
+        <p class="fine-detail">This fixture does not capture audio, record the screen, grade answers, or save notes. All recording is performed by the native ScholarsEye app.</p>
+      </aside>
+    </div>
+    <footer>Self-contained local test fixture · No network requests or external assets · Use each screen for at least 5 seconds when validating 1 fps capture.</footer>
+  </main>
+  <script>
+    const controls = Array.from(document.querySelectorAll('[data-step]'));
+    controls.forEach(button => button.addEventListener('click', () => {
+      controls.forEach(control => {
+        const active = control === button;
+        control.setAttribute('aria-pressed', String(active));
+        document.getElementById(control.dataset.step).hidden = !active;
+      });
+    }));
+    const notes = document.getElementById('notes');
+    notes.addEventListener('input', () => {
+      const count = notes.value.length;
+      document.getElementById('notes-status').textContent = count
+        ? `${count} characters · Notes stay until reload.`
+        : 'Notes stay on this page until reload.';
+    });
+  </script>
+</body>
+</html>

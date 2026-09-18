@@ -1,0 +1,13 @@
+build/
+runtime/
+.build/
+.DS_Store
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+# Sparkle private-key exports must never enter a commit.
+.sparkle-private-key*
+*.sparkle-key
+.secrets/

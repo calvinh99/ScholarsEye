@@ -1,0 +1,45 @@
+name: Publish macOS update
+
+on:
+  push:
+    branches: [main]
+    paths: [config/release.json]
+  workflow_dispatch:
+
+# Only the final job step receives the signing key. Protect main and this workflow
+# using GitHub branch protection; never run release jobs on pull_request_target.
+permissions:
+  contents: write
+
+concurrency:
+  group: scholarseye-stable-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
+      SCHOLARSEYE_RELEASE_REPOSITORY: ${{ vars.SCHOLARSEYE_RELEASE_REPOSITORY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check release configuration and version
+        run: zsh scripts/publish-update.sh --check
+      - name: Test release guards
+        run: python3 -m unittest discover -s tests -p 'test_update_release.py'
+      - name: Build
+        run: zsh scripts/build-macos.sh
+      - name: Test updater and private release discovery
+        run: |
+          zsh scripts/test-updater.sh
+          zsh scripts/test-github-updates.sh
+      - name: Package
+        run: zsh scripts/package-macos.sh
+      - name: Sign, verify, and publish complete release
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: zsh scripts/publish-update.sh
