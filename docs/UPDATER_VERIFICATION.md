@@ -99,3 +99,7 @@ The isolated native app was exercised through its real interface on the Mac mini
 - The saved 99-second session opened and played before and after updating. SHA-256 checks confirmed all six copied session files were unchanged.
 
 Recording/pause/finalization and the start-versus-install race are covered by controller tests. This updater test did not initiate a new recording or request additional capture permissions. Private GitHub transport is verified separately from the isolated loopback install test.
+
+The first [private release workflow](https://github.com/calvinh99/ScholarsEye/actions/runs/35393559192) passed and published v0.3.0. A live probe using the same GitHub discovery helper retrieved that release's raw signed RSS feed with HTTP 200, without attaching authorization to its temporary CDN URL. A separate native URLSession redirect test confirmed a dummy Authorization header is stripped on a host change, matching Sparkle's default downloader behavior.
+
+The exact CI-produced ZIP was downloaded, its archive signature checked against the embedded public key, extracted, and its full code signature verified. Computer use launched that app and confirmed version 0.3.0 with the private GitHub connection interface. No GitHub token was entered or saved in the app during validation; each device still needs its user-provided read-only token. End-to-end private installation with a saved device credential remains untested; the authenticated transport and actual installation/relaunch were verified separately.
