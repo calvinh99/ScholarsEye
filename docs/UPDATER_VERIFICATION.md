@@ -103,3 +103,11 @@ Recording/pause/finalization and the start-versus-install race are covered by co
 The first [private release workflow](https://github.com/calvinh99/ScholarsEye/actions/runs/35393559192) passed and published v0.3.0. A live probe using the same GitHub discovery helper retrieved that release's raw signed RSS feed with HTTP 200, without attaching authorization to its temporary CDN URL. A separate native URLSession redirect test confirmed a dummy Authorization header is stripped on a host change, matching Sparkle's default downloader behavior.
 
 The exact CI-produced ZIP was downloaded, its archive signature checked against the embedded public key, extracted, and its full code signature verified. Computer use launched that app and confirmed version 0.3.0 with the private GitHub connection interface. No GitHub token was entered or saved in the app during validation; each device still needs its user-provided read-only token. End-to-end private installation with a saved device credential remains untested; the authenticated transport and actual installation/relaunch were verified separately.
+
+## Highlighted update icon — September 19, 2026
+
+The isolated app was rebuilt with the top-right gold arrow and recheck-on-click behavior. Computer use confirmed the icon stayed highlighted while a saved session played and no installation began. Right-clicking opened update details.
+
+After discovery, the server was switched to unavailable. Clicking the highlighted icon fetched the feed again, displayed a recoverable retrieval error, and left version 0.3.0 (3) installed. Restoring the valid feed and clicking again completed the fresh check, download, installation, and automatic relaunch into 0.3.1 (4). The icon returned to its neutral appearance, the saved session played, and SHA-256 checks confirmed all six copied session files were unchanged.
+
+Controller checks cover a newer release replacing an earlier notification, cancellation and late callbacks, SDK readiness transitions, and recording guards. The implementation observes Sparkle's readiness properties before starting the fresh check; it uses no timing delay or polling.

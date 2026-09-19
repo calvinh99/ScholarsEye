@@ -18,13 +18,48 @@ struct UpdateControllerTests {
         do {
             try configurationPolicy()
             try explicitInstallationAndRecordingGuards()
+            try refreshingLatestAndCancelingIntent()
+            try sdkReadinessTransitions()
             try cancellationAndFailures()
             try progressAndSuccessfulCompletion()
-            print("PASS: updater URL/key policy, explicit install consent, recording race protection, cancellation/errors, bounded progress, completion, and guard release")
+            print("PASS: updater URL/key policy, explicit fresh-release consent, recording race protection, stale-offer dismissal, cancellation/errors, bounded progress, completion, and guard release")
         } catch {
             FileHandle.standardError.write(Data("FAIL: \(error)\n".utf8))
             exit(1)
         }
+    }
+
+    @MainActor
+    static func completeRefresh(_ controller: UpdateController, version: String = "0.3.1",
+                                reply: @escaping (SPUUserUpdateChoice) -> Void = { _ in }) throws {
+        controller.dismissUpdateInstallation()
+        try require(controller.finishOfferedUpdateCycle(error: nil), "A clicked offer schedules one fresh check after SDK dismissal")
+        try require(controller.claimInstallRefreshReadiness(sessionInProgress: false, canCheckForUpdates: true), "A fresh check waits for SDK readiness")
+        controller.offerUpdate(version: version, notes: "Fresh release", reply: reply)
+    }
+
+    @MainActor
+    static func sdkReadinessTransitions() throws {
+        let controller = UpdateController()
+        controller.start { false }
+        try require(!controller.claimInstallRefreshReadiness(sessionInProgress: false, canCheckForUpdates: true), "Idle SDK readiness does not grant consent")
+        controller.offerUpdate(version: "0.3.1", notes: "") { _ in }
+        controller.installUpdate()
+        controller.dismissUpdateInstallation()
+        try require(controller.finishOfferedUpdateCycle(error: nil), "Finish callback arms a pending fresh check")
+        try require(!controller.claimInstallRefreshReadiness(sessionInProgress: true, canCheckForUpdates: true), "SDK's asynchronous scheduling session must finish first")
+        try require(controller.phase == .checking && controller.blocksRecording && controller.canCancel, "Waiting on readiness remains cancellable and protects capture")
+        try require(!controller.claimInstallRefreshReadiness(sessionInProgress: false, canCheckForUpdates: false), "Partial readiness is insufficient")
+        try require(controller.claimInstallRefreshReadiness(sessionInProgress: false, canCheckForUpdates: true), "Both SDK readiness conditions start one fresh check")
+        try require(!controller.claimInstallRefreshReadiness(sessionInProgress: false, canCheckForUpdates: true), "Multiple KVO callbacks cannot start duplicate checks")
+        controller.cancel()
+        try require(!controller.blocksRecording && !controller.claimInstallRefreshReadiness(sessionInProgress: false, canCheckForUpdates: true), "Cancellation revokes queued readiness callbacks")
+        controller.offerUpdate(version: "0.3.2", notes: "") { _ in }
+        controller.installUpdate()
+        controller.dismissUpdateInstallation()
+        try require(controller.finishOfferedUpdateCycle(error: nil), "Retry arms a new readiness transition")
+        controller.cancel()
+        try require(!controller.claimInstallRefreshReadiness(sessionInProgress: false, canCheckForUpdates: true), "Cancellation before the SDK becomes ready prevents later work")
     }
 
     @MainActor
@@ -65,9 +100,13 @@ struct UpdateControllerTests {
         recording = false
         try require(controller.canInstall, "Install becomes available after capture saves")
         controller.installUpdate()
-        try require(choices == [.install] && controller.phase == .downloading && controller.blocksRecording, "Explicit Update starts one download and excludes new capture")
+        try require(choices == [.dismiss] && controller.phase == .checking && controller.blocksRecording, "Explicit Update dismisses the stale offer and excludes new capture throughout refresh")
         controller.installUpdate()
-        try require(choices.count == 1, "Repeated clicks cannot authorize a second install")
+        try require(choices.count == 1, "Repeated clicks cannot authorize a second refresh")
+        var newestChoices: [SPUUserUpdateChoice] = []
+        try completeRefresh(controller, version: "0.3.2") { newestChoices.append($0) }
+        try require(newestChoices == [.install] && choices == [.dismiss] && controller.availableVersion == "0.3.2"
+                    && controller.phase == .downloading, "The user's click downloads the latest verified version, never the stale highlighted version")
         recording = true
         var readyChoice: SPUUserUpdateChoice?
         controller.showReady { readyChoice = $0 }
@@ -82,6 +121,50 @@ struct UpdateControllerTests {
     }
 
     @MainActor
+    static func refreshingLatestAndCancelingIntent() throws {
+        var recording = false
+        let controller = UpdateController()
+        controller.start { recording }
+        try require(!controller.finishOfferedUpdateCycle(error: nil), "Unrelated SDK completion cannot create install consent")
+        try require(controller.responds(to: #selector(SPUUpdaterDelegate.updater(_:didFinishUpdateCycleFor:error:))), "Sparkle can dispatch the cycle-finished callback")
+        var staleChoices: [SPUUserUpdateChoice] = []
+        controller.offerUpdate(version: "0.3.1", notes: "") { staleChoices.append($0) }
+        controller.installUpdate()
+        controller.dismissUpdateInstallation()
+        try require(controller.phase == .checking && controller.blocksRecording && controller.canCancel, "SDK dismissal preserves a cancellable refresh and the recording guard")
+        controller.cancel()
+        try require(!controller.blocksRecording && !controller.finishOfferedUpdateCycle(error: nil), "Cancel while dismissing prevents a delayed SDK callback from refreshing or installing")
+        controller.offerUpdate(version: "0.3.2", notes: "") { _ in }
+        controller.installUpdate()
+        controller.dismissUpdateInstallation()
+        try require(controller.finishOfferedUpdateCycle(error: nil), "Fresh update check begins after dismissal")
+        controller.showUserInitiatedUpdateCheck {}
+        controller.cancel()
+        var lateChoices: [SPUUserUpdateChoice] = []
+        controller.offerUpdate(version: "0.3.3", notes: "") { lateChoices.append($0) }
+        try require(lateChoices.isEmpty && controller.phase == .available, "A late fresh offer after cancellation never downloads automatically")
+        controller.installUpdate()
+        controller.dismissUpdateInstallation()
+        try require(controller.finishOfferedUpdateCycle(error: nil), "Retry creates a new one-use refresh intent")
+        recording = true
+        controller.offerUpdate(version: "0.3.4", notes: "") { lateChoices.append($0) }
+        try require(lateChoices == [.dismiss] && controller.phase == .available && !controller.canInstall,
+                    "Capture becoming active during refresh prevents download; the latest offer stays available")
+        recording = false
+        controller.installUpdate()
+        controller.dismissUpdateInstallation()
+        try require(controller.finishOfferedUpdateCycle(error: nil), "Idle retry can check again")
+        controller.showUpdateNotFoundWithError(NSError(domain: "Fixture", code: 0)) {}
+        try require(controller.phase == .current && !controller.blocksRecording, "No newer release clears consent and capture lock")
+        controller.offerUpdate(version: "0.3.5", notes: "") { lateChoices.append($0) }
+        try require(controller.phase == .available && !controller.blocksRecording, "A future background offer cannot inherit no-update consent")
+        controller.installUpdate()
+        controller.dismissUpdateInstallation()
+        try require(!controller.finishOfferedUpdateCycle(error: NSError(domain: "Fixture", code: 1))
+                    && controller.phase == .failed && !controller.blocksRecording, "Failed dismissal releases consent and capture lock")
+    }
+
+    @MainActor
     static func cancellationAndFailures() throws {
         let controller = UpdateController()
         controller.start { false }
@@ -93,6 +176,7 @@ struct UpdateControllerTests {
         try require(canceled == 1 && controller.phase == .idle && !controller.canCancel, "Check cancellation callback runs exactly once")
         controller.offerUpdate(version: "0.3.1", notes: "") { _ in }
         controller.installUpdate()
+        try completeRefresh(controller)
         controller.showDownloadInitiated { canceled += 1 }
         controller.cancel()
         try require(canceled == 2 && !controller.blocksRecording && controller.progress == nil, "Canceled downloads release capture and progress")
@@ -102,6 +186,7 @@ struct UpdateControllerTests {
 
         controller.offerUpdate(version: "0.3.1", notes: "") { _ in }
         controller.installUpdate()
+        try completeRefresh(controller)
         controller.showDownloadInitiated {}
         var acknowledged = false
         controller.showUpdaterError(NSError(domain: "Fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Signature verification failed."])) { acknowledged = true }
@@ -115,11 +200,13 @@ struct UpdateControllerTests {
         dismissed.start { false }
         dismissed.offerUpdate(version: "0.3.1", notes: "") { _ in }
         dismissed.installUpdate()
+        try completeRefresh(dismissed)
         dismissed.showDownloadDidStartExtractingUpdate()
         dismissed.dismissUpdateInstallation()
         try require(!dismissed.blocksRecording && !dismissed.canInstall && dismissed.progress == nil, "Dismissing extraction releases capture and callbacks")
         dismissed.offerUpdate(version: "0.3.1", notes: "") { _ in }
         dismissed.installUpdate()
+        try completeRefresh(dismissed)
         dismissed.showReady { _ in }
         try require(dismissed.phase == .installing, "Install dismissal regression starts during installation")
         dismissed.dismissUpdateInstallation()
@@ -132,6 +219,7 @@ struct UpdateControllerTests {
         controller.start { false }
         controller.offerUpdate(version: "0.3.1", notes: "") { _ in }
         controller.installUpdate()
+        try completeRefresh(controller)
         controller.showDownloadInitiated {}
         controller.showDownloadDidReceiveData(ofLength: 20)
         try require(controller.progress == nil, "Unknown total uses indeterminate progress")

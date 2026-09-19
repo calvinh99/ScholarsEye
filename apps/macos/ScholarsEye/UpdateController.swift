@@ -11,6 +11,8 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
         case unconfigured, idle, checking, available, downloading, extracting, installing, current, failed
     }
 
+    private enum InstallIntent { case none, waitingForDismissal, refreshing }
+
     @Published private(set) var phase: Phase = .unconfigured
     @Published private(set) var availableVersion: String?
     @Published private(set) var message = "Updates will be available once the release channel is connected."
@@ -19,6 +21,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
     @Published private(set) var requiresGitHubConnection = false
     @Published private(set) var canRetryRestart = false
     @Published var showDetails = false
+    @Published private var installIntent: InstallIntent = .none
     let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
     let githubRepository = (Bundle.main.object(forInfoDictionaryKey: "ScholarsEyeGitHubRepository") as? String).flatMap { $0.isEmpty ? nil : $0 }
 
@@ -35,8 +38,11 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
     private var retryRestart: (() -> Void)?
     private var resolvedFeedURL: URL?
     private var archiveToken: String?
+    private var installRefreshTask: Task<Void, Never>?
+    private var refreshReadinessObservations: [NSKeyValueObservation] = []
+    private var awaitingRefreshReadiness = false
 
-    var blocksRecording: Bool { [.downloading, .extracting, .installing].contains(phase) }
+    var blocksRecording: Bool { installIntent != .none || [.downloading, .extracting, .installing].contains(phase) }
     var isBusy: Bool { phase == .checking || blocksRecording }
     var canCancel: Bool { cancellation != nil }
     var canInstall: Bool { phase == .available && choice != nil && !recordingIsActive() }
@@ -110,11 +116,14 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
         updater.checkForUpdates()
     }
 
-    private func beginPrivateCheck() {
+    private func beginPrivateCheck(installRequested: Bool = false) {
         guard let repository = githubRepository, let updater,
-              !isBusy, phase != .available, !updater.sessionInProgress else { return }
+              (installRequested ? installIntent == .refreshing : !isBusy && phase != .available),
+              !updater.sessionInProgress else { return }
         do {
             guard let token = try GitHubUpdateCredentials.read(repository: repository) else {
+                installIntent = .none
+                cancellation = nil
                 requiresGitHubConnection = true
                 phase = .idle
                 message = "Connect GitHub once on this Mac to receive private updates. Use a fine-grained token with Contents: Read-only for \(repository)."
@@ -185,6 +194,75 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
     func installUpdate() {
         guard canInstall, let reply = choice else { return }
         choice = nil
+        userAuthorizedInstallation = false
+        installIntent = .waitingForDismissal
+        phase = .checking
+        progress = nil
+        message = "Checking for the latest version before updating…"
+        cancellation = { [weak self] in self?.stopObservingRefreshReadiness() }
+        // Release the earlier SDK offer so a release published since the icon
+        // appeared can replace it. This does not authorize the earlier archive.
+        reply(.dismiss)
+    }
+
+    // The SDK's finish callback and deterministic tests share this transition.
+    // A finish callback from an unrelated check cannot grant installation consent.
+    func finishOfferedUpdateCycle(error: Error?) -> Bool {
+        guard installIntent == .waitingForDismissal else { return false }
+        if let error { presentFailure(error); return false }
+        installIntent = .refreshing
+        awaitingRefreshReadiness = true
+        return true
+    }
+
+    // Consume readiness once. SDK scheduling can temporarily reactivate a
+    // session after its finish delegate callback, so elapsed turns are not a
+    // reliable indication that a new check can start.
+    func claimInstallRefreshReadiness(sessionInProgress: Bool, canCheckForUpdates: Bool) -> Bool {
+        guard installIntent == .refreshing, awaitingRefreshReadiness,
+              !sessionInProgress, canCheckForUpdates else { return false }
+        awaitingRefreshReadiness = false
+        return true
+    }
+
+    private func observeRefreshReadiness() {
+        guard installIntent == .refreshing, let updater else { return }
+        let changed: @Sendable (SPUUpdater, NSKeyValueObservedChange<Bool>) -> Void = { [weak self] _, _ in
+            Task { @MainActor [weak self] in self?.refreshForInstallation() }
+        }
+        // Both properties are KVO-backed by Sparkle. Register before reading
+        // their current values so a readiness transition cannot be missed.
+        refreshReadinessObservations = [
+            updater.observe(\.sessionInProgress, options: [.new], changeHandler: changed),
+            updater.observe(\.canCheckForUpdates, options: [.new], changeHandler: changed)
+        ]
+        refreshForInstallation()
+    }
+
+    private func stopObservingRefreshReadiness() {
+        awaitingRefreshReadiness = false
+        refreshReadinessObservations.removeAll()
+        installRefreshTask?.cancel()
+        installRefreshTask = nil
+    }
+
+    private func refreshForInstallation() {
+        guard installIntent == .refreshing else { return }
+        guard !recordingIsActive(), let updater else {
+            presentFailure(NSError(domain: "ScholarsEye.Update", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "The update check could not start. Finish saving any recording and try again."]))
+            return
+        }
+        guard claimInstallRefreshReadiness(sessionInProgress: updater.sessionInProgress,
+                                          canCheckForUpdates: updater.canCheckForUpdates) else { return }
+        stopObservingRefreshReadiness()
+        if githubRepository != nil { beginPrivateCheck(installRequested: true) }
+        else { updater.checkForUpdates() }
+    }
+
+    private func downloadOfferedUpdate() {
+        guard canInstall, let reply = choice else { return }
+        choice = nil
         userAuthorizedInstallation = true
         phase = .downloading
         progress = nil
@@ -195,6 +273,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
     func cancel() {
         guard let cancellation else { return }
         self.cancellation = nil
+        installIntent = .none
         userAuthorizedInstallation = false
         cancellation()
         phase = .idle
@@ -221,6 +300,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
         availableVersion = String(appcastItem.displayVersionString.prefix(60))
         releaseNotes = Self.plainNotes(appcastItem.itemDescription ?? "")
         if appcastItem.isInformationOnlyUpdate {
+            installIntent = .none
             phase = .failed
             message = "Version \(availableVersion ?? "") requires a manual installation. Check the project’s releases."
             reply(.dismiss)
@@ -228,6 +308,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
         }
         if let repository = githubRepository,
            appcastItem.fileURL.map({ isTrustedAssetURL($0, repository: repository) }) != true {
+            installIntent = .none
             phase = .failed
             message = "The update download does not belong to the configured private repository."
             reply(.dismiss)
@@ -239,6 +320,9 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
     // Kept separate from the SDK callback so recording/install race guards can
     // be tested without a live release server or fake Sparkle state objects.
     func offerUpdate(version: String, notes: String, reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        let installRequested = installIntent == .refreshing
+        stopObservingRefreshReadiness()
+        installIntent = .none
         userAuthorizedInstallation = false
         cancellation = nil
         availableVersion = String(version.prefix(60))
@@ -247,6 +331,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
         phase = .available
         progress = nil
         message = "Installs version \(availableVersion ?? "") and restarts ScholarsEye. Your recordings stay in place."
+        if installRequested { downloadOfferedUpdate() }
     }
 
     func showUpdateReleaseNotes(with downloadData: SPUDownloadData) {
@@ -255,6 +340,10 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
     func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) {}
 
     func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
+        stopObservingRefreshReadiness()
+        installIntent = .none
+        choice = nil
+        cancellation = nil
         phase = .current
         message = (error as NSError).localizedRecoverySuggestion ?? "You’re running the latest compatible version."
         availableVersion = nil
@@ -319,6 +408,11 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
     }
     func dismissUpdateInstallation() {
         choice = nil
+        // Dismissing the stale offer precedes didFinishUpdateCycle. Keep only
+        // the user's pending fresh check alive across that expected callback.
+        if installIntent == .waitingForDismissal { return }
+        stopObservingRefreshReadiness()
+        installIntent = .none
         cancellation = nil
         progress = nil
         userAuthorizedInstallation = false
@@ -332,6 +426,17 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
         let nsError = error as NSError
         if nsError.domain == SUSparkleErrorDomain && nsError.code == 1001 { return }
         presentFailure(error)
+    }
+
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
+        guard finishOfferedUpdateCycle(error: error) else { return }
+        installRefreshTask = Task { @MainActor [weak self] in
+            // Observe the SDK's actual readiness after the callback returns;
+            // its asynchronous scheduling work can keep the session active.
+            guard !Task.isCancelled else { return }
+            self?.installRefreshTask = nil
+            self?.observeRefreshReadiness()
+        }
     }
 
     func updater(_ updater: SPUUpdater, shouldDownloadReleaseNotesForUpdate updateItem: SUAppcastItem) -> Bool {
@@ -353,6 +458,8 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
     func feedURLString(for updater: SPUUpdater) -> String? { resolvedFeedURL?.absoluteString }
 
     private func presentFailure(_ error: Error) {
+        installIntent = .none
+        stopObservingRefreshReadiness()
         phase = .failed
         progress = nil
         choice = nil
@@ -374,35 +481,64 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
 struct UpdateStatusView: View {
     @ObservedObject var updates: UpdateController
     let recording: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var token = ""
+    @State private var hovering = false
+
+    private var updateAvailable: Bool { updates.phase == .available }
+    private var tooltip: String {
+        if updateAvailable {
+            return recording ? "Update available. Stop and save your recording, then click to update."
+                : "Update to \(updates.availableVersion ?? "the latest version") and restart"
+        }
+        return updates.isBusy ? updates.buttonTitle : updates.message
+    }
+
+    private var tokenCreationURL: URL {
+        var components = URLComponents(string: "https://github.com/settings/personal-access-tokens/new")!
+        components.queryItems = [URLQueryItem(name: "name", value: "ScholarsEye updates"),
+                                URLQueryItem(name: "contents", value: "read")]
+        if let owner = updates.githubRepository?.split(separator: "/").first {
+            components.queryItems?.append(URLQueryItem(name: "target_name", value: String(owner)))
+        }
+        return components.url!
+    }
 
     var body: some View {
-        HStack(spacing: 4) {
-            Button {
-                if updates.phase == .available { updates.installUpdate() }
-                else { updates.checkForUpdates() }
-            } label: {
-                HStack(spacing: 8) {
-                    if updates.isBusy { ProgressView().controlSize(.mini) }
-                    else { Image(systemName: updates.phase == .available ? "arrow.down.circle" : "arrow.triangle.2.circlepath") }
-                    Text(updates.buttonTitle).lineLimit(1)
-                    Spacer(minLength: 0)
-                }.contentShape(Rectangle())
+        Button {
+            if updateAvailable && !recording { updates.installUpdate() }
+            else { updates.checkForUpdates() }
+        } label: {
+            ZStack {
+                Circle().fill(updateAvailable ? Color(red: 1, green: 0.86, blue: 0.46)
+                              : Color.black.opacity(hovering ? 0.075 : 0.035))
+                if updates.isBusy {
+                    ProgressView().controlSize(.small).scaleEffect(0.75)
+                } else {
+                    Image(systemName: updateAvailable ? "arrow.up" : updates.phase == .failed ? "exclamationmark" : "arrow.triangle.2.circlepath")
+                        .font(.system(size: 13, weight: updateAvailable ? .bold : .medium))
+                        .foregroundStyle(updateAvailable ? Color(red: 0.37, green: 0.25, blue: 0.06) : Color.secondary)
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(updates.isBusy || (recording && updates.phase == .available))
-            .help(recording && updates.phase == .available ? "Stop and save your recording before updating." : updates.message)
-            Button { updates.showDetails.toggle() } label: { Image(systemName: "info.circle") }
-                .buttonStyle(.plain).accessibilityLabel("Update details")
+            .frame(width: 30, height: 30).contentShape(Circle())
         }
-        .font(.system(size: 11)).padding(.horizontal, 12).padding(.vertical, 10)
-        .background(updates.phase == .available ? Color.black.opacity(0.055) : .clear, in: RoundedRectangle(cornerRadius: 6))
-        .popover(isPresented: $updates.showDetails, arrowEdge: .leading) {
+        .buttonStyle(.plain)
+        .accessibilityLabel(updateAvailable ? "Update to \(updates.availableVersion ?? "latest") and restart" : updates.buttonTitle)
+        .help(tooltip)
+        .onHover { hovering = $0 }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: updateAvailable)
+        .contextMenu {
+            Button("Update details…") { updates.showDetails = true }
+        }
+        .popover(isPresented: $updates.showDetails, arrowEdge: .top) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("ScholarsEye \(updates.currentVersion)").font(.headline)
                 Text(updates.message).fixedSize(horizontal: false, vertical: true)
                 if updates.githubRepository != nil, updates.configured, !updates.isBusy {
                     if updates.requiresGitHubConnection || updates.phase == .failed {
+                        Link("Create a GitHub token ↗", destination: tokenCreationURL)
+                        Text("Select only ScholarsEye, then set Contents to Read-only.")
+                            .font(.caption).foregroundStyle(.secondary)
                         SecureField("Read-only GitHub token", text: $token)
                             .textContentType(.password).textFieldStyle(.roundedBorder)
                         Button("Connect GitHub") {

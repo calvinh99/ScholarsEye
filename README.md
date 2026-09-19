@@ -42,6 +42,6 @@ Generated recordings, build output, and local test media are ignored by `.gitign
 
 ## Install and update
 
-See [installation](docs/INSTALL.md) for the portable Apple silicon ZIP and [updates](docs/UPDATES.md) for private GitHub access and release publishing. Portable copies check at launch and about once an hour, then show an **Update** button. Clicking it installs a signed update and restarts after any recording has finished. Development builds are updated by rebuilding, so automatic installation cannot replace their development storage configuration.
+See [installation](docs/INSTALL.md) for the portable Apple silicon ZIP and [updates](docs/UPDATES.md) for private GitHub access and release publishing. Portable copies check at launch and about once an hour, then highlight a gold update arrow at the top right. After saving any recording, click the arrow to fetch the newest release, install, and restart. Stopping a recording never triggers an update automatically. Development builds are updated by rebuilding, so automatic installation cannot replace their development storage configuration.
 
 Publishing requires incrementing both version and build in `config/release.json` and pushing to `main`. Source-only commits do not announce an update. The source repository and release downloads stay private.

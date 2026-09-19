@@ -58,7 +58,7 @@ The latest-release API excludes drafts. A failed upload or signing step therefor
 
 Already published versions and existing drafts are never overwritten. If a job fails after creating a draft, inspect it, remove it if it is an incomplete unpublished attempt, and rerun. For an already published release, bump version and build again. Actions serializes releases to prevent overlapping publication jobs.
 
-There is no forced background installation or restart. Users see an update and choose when to install it, after finishing any active recording.
+There is no forced background installation or restart. A gold arrow icon appears at the top right when an update is available. Clicking it checks the release feed again, downloads the newest compatible release, and quits/reopens the app. A recording must finish saving before that click can start an update; stopping a recording never triggers installation by itself. Right-click the icon for update details, and click the progress indicator to view or cancel an in-progress download.
 
 ## Local preparation without publication
 

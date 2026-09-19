@@ -138,8 +138,6 @@ struct MainView: View {
                 }.padding(.horizontal, 10)
             }
             Spacer(minLength: 12)
-            UpdateStatusView(updates: updates, recording: recording || recorder.operationInProgress)
-                .padding(.horizontal, 10)
             Button { NSWorkspace.shared.open(AppPaths.recordings) } label: {
                 HStack(spacing: 8) {
                     SketchGlyph(kind: .folder).frame(width: 16, height: 16)
@@ -165,6 +163,8 @@ struct MainView: View {
                 Circle().fill(recorder.state == .recording ? Color(red: 0.82, green: 0.28, blue: 0.22) : Paper.muted).frame(width: 6, height: 6)
                 Text(recorder.state == .paused ? "Paused" : recorder.state == .stopping ? "Saving…" : "Recording")
             }
+            UpdateStatusView(updates: updates, recording: recording || recorder.operationInProgress)
+                .padding(.leading, 8)
         }.font(.system(size: 11)).foregroundStyle(Paper.muted)
             .padding(.horizontal, 28).frame(height: 52)
             .overlay(alignment: .bottom) { Rectangle().fill(Paper.line.opacity(0.6)).frame(height: 1) }

@@ -1,6 +1,6 @@
 {
-  "version": "0.3.0",
-  "build": "3",
+  "version": "0.3.1",
+  "build": "4",
   "githubRepository": "calvinh99/ScholarsEye",
   "updateFeedURL": "https://api.github.com/repos/calvinh99/ScholarsEye/releases/latest",
   "publicEDKey": "h0GmGvfsDogduZp4DucGp/tumkMukOcwIxYBHsXe3NI="
