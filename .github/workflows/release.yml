@@ -33,7 +33,7 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_update_release.py'
       - name: Build
         run: zsh scripts/build-macos.sh
-      - name: Test updater and private release discovery
+      - name: Test updater and release discovery
         run: |
           zsh scripts/test-updater.sh
           zsh scripts/test-github-updates.sh

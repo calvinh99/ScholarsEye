@@ -111,3 +111,11 @@ The isolated app was rebuilt with the top-right gold arrow and recheck-on-click 
 After discovery, the server was switched to unavailable. Clicking the highlighted icon fetched the feed again, displayed a recoverable retrieval error, and left version 0.3.0 (3) installed. Restoring the valid feed and clicking again completed the fresh check, download, installation, and automatic relaunch into 0.3.1 (4). The icon returned to its neutral appearance, the saved session played, and SHA-256 checks confirmed all six copied session files were unchanged.
 
 Controller checks cover a newer release replacing an earlier notification, cancellation and late callbacks, SDK readiness transitions, and recording guards. The implementation observes Sparkle's readiness properties before starting the fresh check; it uses no timing delay or polling.
+
+## Public feed migration — September 20, 2026
+
+The repository was confirmed public before publishing the token-free configuration. The release validator rejects public-mode bundles or ZIPs that retain private-repository settings; all 19 release guard tests and the 32-test Python suite passed.
+
+Computer use exercised the public-mode fixture after explicitly setting its isolated `SUEnableAutomaticChecks` preference to false, matching the earlier private build. Launch detected the signed update automatically and showed the gold arrow without a token or manual check. Clicking installed and automatically relaunched 0.3.0 (3) into 0.3.1 (4). Saved playback worked after the restart, and all six copied session-file hashes remained unchanged. These fixture version numbers are independent of the production 0.3.2 release.
+
+The controller regression also constructs real Sparkle settings using a disposable preference domain and temporary host bundle. It verifies that public checks are enabled immediately, automatic downloads remain disabled, and migration leaves unrelated preferences and private-mode behavior unchanged.

@@ -1,7 +1,7 @@
 {
-  "version": "0.3.1",
-  "build": "4",
-  "githubRepository": "calvinh99/ScholarsEye",
-  "updateFeedURL": "https://api.github.com/repos/calvinh99/ScholarsEye/releases/latest",
+  "version": "0.3.2",
+  "build": "5",
+  "githubRepository": "",
+  "updateFeedURL": "https://github.com/calvinh99/ScholarsEye/releases/latest/download/appcast.xml",
   "publicEDKey": "h0GmGvfsDogduZp4DucGp/tumkMukOcwIxYBHsXe3NI="
 }

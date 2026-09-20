@@ -2,7 +2,7 @@
 
 Requires an **Apple silicon Mac (M1 or newer) running macOS 15 or later**. This build does not run on Intel Macs.
 
-1. AirDrop `ScholarsEye-0.3.1-macOS-AppleSilicon.zip` to your laptop, or download it from the private [GitHub releases](https://github.com/calvinh99/ScholarsEye/releases) while signed in.
+1. AirDrop `ScholarsEye-0.3.2-macOS-AppleSilicon.zip` to your laptop, or download it from the public [GitHub releases](https://github.com/calvinh99/ScholarsEye/releases).
 2. Double-click the ZIP, then move `ScholarsEye.app` into **Applications**.
 3. Open ScholarsEye. Approve screen recording and microphone access when requested; each Mac needs its own permissions. If macOS requests a restart, quit and reopen the app.
 
@@ -10,15 +10,9 @@ This personal development build is ad-hoc signed and has not been notarized by A
 
 Recordings are saved on that Mac in `~/Movies/ScholarsEye`. The ZIP contains the app only; your existing recordings are not included. Recording, in-app playback, and CPU/RAM diagnostics require no Python, FFmpeg, or other installations.
 
-Version 0.3.0 introduced in-app updates. Install the latest ZIP once over older copies, then click the update icon at the top right and connect GitHub. The app keeps a fine-grained token in this Mac's Keychain.
+Version **0.3.2** uses public update downloads, with **no GitHub account or token required**. Install this ZIP manually once over 0.3.0/0.3.1: those older builds still expect a private-repository token even after the repository becomes public. Your saved sessions live outside the app and remain in place.
 
-To create the token:
-
-1. Open [GitHub's fine-grained token form](https://github.com/settings/personal-access-tokens/new). Name it **ScholarsEye updates**, choose an expiration, and use **calvinh99** as the resource owner.
-2. Choose **Only select repositories → ScholarsEye**. Under repository permissions, set **Contents → Read-only**; leave other optional permissions unset.
-3. Click **Generate token**, copy it, and paste it directly into ScholarsEye's **Read-only GitHub token** field. Click **Connect GitHub**. When the token expires, create a replacement and reconnect in the app.
-
-The top-right update icon turns gold when a release is available. Nothing installs until you click it. That click checks for the latest release, downloads and verifies it, then quits and reopens the app. Finish and save any recording before clicking; the app never queues an automatic restart for the end of a recording. See [update setup](UPDATES.md).
+The top-right update icon turns gold when a release is available. Nothing installs until you click it. That click checks for the latest release, downloads and verifies it, then quits and reopens the app. Finish and save any recording before clicking; the app never queues an automatic restart for the end of a recording. See [update publishing](UPDATES.md).
 
 There is currently **no sync to the Mac mini or between computers**, and no automatic model analysis or review-card generation. The developer's media-audit and idle-candidate helper stays on the Mac mini and is not included in this portable package.
 

@@ -5,6 +5,7 @@ import plistlib
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts/update_release.py"
@@ -155,6 +156,67 @@ class ReleasePolicyTests(unittest.TestCase):
                 path.write_bytes(plistlib.dumps(dict(info, **{key: value})))
                 with self.subTest(key=key), self.assertRaises(release.ReleaseError):
                     release.validate_app(CONFIG, app)
+
+    def test_public_app_rejects_stale_private_repository_setting(self):
+        info = {"CFBundleIdentifier": "com.scholarseye.app", "CFBundleVersion": "3",
+                "CFBundleShortVersionString": "0.3.0", "SUFeedURL": CONFIG["updateFeedURL"],
+                "SUPublicEDKey": CONFIG["publicEDKey"], "SURequireSignedFeed": True,
+                "SUVerifyUpdateBeforeExtraction": True}
+        public = dict(CONFIG, githubRepository="")
+        release.validate_app_info(public, info)
+        release.validate_app_info(public, dict(info, ScholarsEyeGitHubRepository=""))
+        with self.assertRaisesRegex(release.ReleaseError, "still require private GitHub access"):
+            release.validate_app_info(public, dict(info, ScholarsEyeGitHubRepository=REPO))
+        private_info = dict(info, SUFeedURL=PRIVATE_CONFIG["updateFeedURL"], ScholarsEyeGitHubRepository=REPO)
+        release.validate_app_info(PRIVATE_CONFIG, private_info)
+        with self.assertRaises(release.ReleaseError):
+            release.validate_app_info(PRIVATE_CONFIG, dict(private_info, ScholarsEyeGitHubRepository=""))
+
+    def test_public_preparation_checks_zip_for_stale_private_repository(self):
+        info = {"CFBundleIdentifier": "com.scholarseye.app", "CFBundleVersion": "3",
+                "CFBundleShortVersionString": "0.3.0", "SUFeedURL": CONFIG["updateFeedURL"],
+                "SUPublicEDKey": CONFIG["publicEDKey"], "SURequireSignedFeed": True,
+                "SUVerifyUpdateBeforeExtraction": True}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            distribution = root / "build/distribution"
+            app = distribution / "ScholarsEye.app"
+            (app / "Contents").mkdir(parents=True)
+            (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
+            archive = distribution / "ScholarsEye-0.3.0-macOS-AppleSilicon.zip"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr("ScholarsEye.app/Contents/Info.plist",
+                                plistlib.dumps(dict(info, ScholarsEyeGitHubRepository=REPO)))
+            with patch.object(release, "ROOT", root), patch.object(release, "run") as run, \
+                 self.assertRaisesRegex(release.ReleaseError, "still require private GitHub access"):
+                release.prepare(dict(CONFIG, githubRepository=""), REPO,
+                                base64.b64encode(bytes(32)).decode(), root / "signed-output")
+            run.assert_not_called()
+            self.assertFalse((root / "signed-output").exists())
+
+    def test_public_same_repository_publish_preserves_signed_feed_bytes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            archive = Path(temp) / "update.zip"
+            archive.write_bytes(b"signed archive")
+            feed = Path(temp) / "appcast.xml"
+            signed_bytes = b'<?xml version="1.0"?><rss/>\n<!-- existing signed feed bytes -->'
+            feed.write_bytes(signed_bytes)
+            with patch.object(release, "run", return_value="") as run, \
+                 patch.object(release, "rewrite_private_feed") as rewrite, \
+                 patch.dict(release.os.environ, {"GITHUB_SHA": "releasecommit", "GITHUB_REPOSITORY": REPO}), \
+                 patch("builtins.print"):
+                release.publish(dict(CONFIG, githubRepository=""), REPO, archive, feed)
+            self.assertEqual(feed.read_bytes(), signed_bytes)
+            rewrite.assert_not_called()
+            self.assertEqual(run.call_count, 2)
+            create, publish = [call.args[0] for call in run.call_args_list]
+            self.assertIn(archive, create)
+            self.assertIn(feed, create)
+            self.assertEqual(create[create.index("--target") + 1], "releasecommit")
+            self.assertIn("--generate-notes", create)
+            self.assertIn("--draft", create)
+            self.assertIn("--draft=false", publish)
+            self.assertIn("--latest", publish)
 
     def test_feed_points_to_immutable_archive_and_validates_size(self):
         with tempfile.TemporaryDirectory() as temp:

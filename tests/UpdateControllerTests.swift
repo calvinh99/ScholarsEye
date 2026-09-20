@@ -17,16 +17,53 @@ struct UpdateControllerTests {
     static func main() {
         do {
             try configurationPolicy()
+            try publicChannelPreferenceMigration()
             try explicitInstallationAndRecordingGuards()
             try refreshingLatestAndCancelingIntent()
             try sdkReadinessTransitions()
             try cancellationAndFailures()
             try progressAndSuccessfulCompletion()
-            print("PASS: updater URL/key policy, explicit fresh-release consent, recording race protection, stale-offer dismissal, cancellation/errors, bounded progress, completion, and guard release")
+            print("PASS: updater URL/key policy, public-channel preference migration, explicit fresh-release consent, recording race protection, stale-offer dismissal, cancellation/errors, bounded progress, completion, and guard release")
         } catch {
             FileHandle.standardError.write(Data("FAIL: \(error)\n".utf8))
             exit(1)
         }
+    }
+
+    @MainActor
+    static func publicChannelPreferenceMigration() throws {
+        let identifier = "com.scholarseye.preference-test." + UUID().uuidString
+        guard let defaults = UserDefaults(suiteName: identifier) else { throw Failure.failed("Could not create isolated preference domain") }
+        defer { defaults.removePersistentDomain(forName: identifier) }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(identifier + ".app")
+        let contents = folder.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let info: [String: Any] = ["CFBundleIdentifier": identifier, "CFBundleName": "Updater migration fixture",
+                                   "CFBundleVersion": "1", "CFBundleShortVersionString": "1.0.0",
+                                   "CFBundlePackageType": "APPL", "SUEnableAutomaticChecks": true,
+                                   "SUAllowsAutomaticUpdates": false, "SUAutomaticallyUpdate": false,
+                                   "SUScheduledCheckInterval": 3600]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: contents.appendingPathComponent("Info.plist"))
+        guard let bundle = Bundle(url: folder) else { throw Failure.failed("Could not load isolated migration bundle") }
+        defaults.set(false, forKey: "SUEnableAutomaticChecks")
+        defaults.set(true, forKey: "SUAutomaticallyUpdate")
+        defaults.set("unchanged", forKey: "unrelated-setting")
+        UpdateController.migrateAutomaticCheckPreference(githubRepository: "owner/private", defaults: defaults)
+        try require(defaults.object(forKey: "SUEnableAutomaticChecks") as? Bool == false, "Private channel keeps its separate scheduler preference")
+        UpdateController.migrateAutomaticCheckPreference(githubRepository: nil, defaults: defaults)
+        try require(defaults.object(forKey: "SUEnableAutomaticChecks") == nil, "Public migration removes the prior private scheduler override")
+        try require(defaults.string(forKey: "unrelated-setting") == "unchanged", "Migration changes no unrelated preferences")
+        let driver = UpdateController()
+        let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: nil)
+        try require(updater.automaticallyChecksForUpdates, "Real Sparkle settings inherit public checks immediately at construction, without a delayed setter reset")
+        try require(!updater.automaticallyDownloadsUpdates, "The bundle prohibits unattended downloads even if an older preference requested them")
+        UpdateController.migrateAutomaticCheckPreference(githubRepository: nil, defaults: defaults)
+        try require(defaults.object(forKey: "SUEnableAutomaticChecks") == nil, "Repeated startup migration is idempotent")
+        defaults.set(true, forKey: "SUEnableAutomaticChecks")
+        UpdateController.migrateAutomaticCheckPreference(githubRepository: nil, defaults: defaults)
+        try require(defaults.bool(forKey: "SUEnableAutomaticChecks"), "Existing enabled preferences remain enabled")
     }
 
     @MainActor

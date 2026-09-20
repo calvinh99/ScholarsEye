@@ -75,6 +75,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
               let key = info["SUPublicEDKey"] as? String,
               Self.validConfiguration(feed: rawURL, publicKey: key,
                                       allowLoopback: info["ScholarsEyeAllowsLocalUpdateFeed"] as? Bool == true) else { return }
+        Self.migrateAutomaticCheckPreference(githubRepository: githubRepository, defaults: .standard)
         let updater = SPUUpdater(hostBundle: .main, applicationBundle: .main, userDriver: self, delegate: self)
         self.updater = updater
         do {
@@ -96,6 +97,17 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
             self.updater = nil
             phase = .failed
             message = "Updates aren’t configured correctly. \(error.localizedDescription)"
+        }
+    }
+
+    static func migrateAutomaticCheckPreference(githubRepository: String?, defaults: UserDefaults) {
+        guard githubRepository?.isEmpty != false else { return }
+        // Private releases disabled Sparkle's scheduler in persistent defaults.
+        // Public releases use the bundle's always-on check policy again. Remove
+        // that legacy override before Sparkle captures its initial settings;
+        // its runtime setter would schedule a competing delayed cycle reset.
+        if defaults.object(forKey: "SUEnableAutomaticChecks") as? Bool == false {
+            defaults.removeObject(forKey: "SUEnableAutomaticChecks")
         }
     }
 

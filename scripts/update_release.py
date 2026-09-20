@@ -101,6 +101,9 @@ def validate_app_info(config, info):
                 "SUVerifyUpdateBeforeExtraction": True}
     if config.get("githubRepository"):
         expected["ScholarsEyeGitHubRepository"] = config["githubRepository"]
+    else:
+        require(info.get("ScholarsEyeGitHubRepository", "") == "",
+                "Public updates must not retain ScholarsEyeGitHubRepository; the app would still require private GitHub access.")
     for key, value in expected.items():
         require(info.get(key) == value, f"Packaged app {key} does not match the release configuration.")
     require(not any(k in info for k in ("ScholarsEyeRecordingsPath", "ScholarsEyeAnalysisScript")),
