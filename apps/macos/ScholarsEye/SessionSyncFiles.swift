@@ -82,6 +82,7 @@ enum SessionSyncFiles {
         guard url.path != "/" else { throw SessionSyncError.message("The recording library cannot be the filesystem root.") }
         if create { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
         let root = URL(fileURLWithPath: try canonicalPath(url.path), isDirectory: true)
+        guard root.path != "/" else { throw SessionSyncError.message("The recording library cannot resolve to the filesystem root.") }
         guard try FileManager.default.attributesOfItem(atPath: root.path)[.type] as? FileAttributeType == .typeDirectory else {
             throw SessionSyncError.message("The recording library is not a directory.")
         }

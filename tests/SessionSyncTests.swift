@@ -53,6 +53,9 @@ struct SessionSyncTests {
         for path in ["/", "~/", "relative/path", "/a/../b", "/a/./b", "/a\nb", "/a\u{0}b"] {
             try rejects("Unsafe remote path accepted") { try SyncConfiguration(remotePath: path).validate() }
         }
+        try rejects("An aliased filesystem root was accepted as a library") {
+            _ = try SessionSyncFiles.directory(URL(fileURLWithPath: "/."))
+        }
         let value = "A folder's $(touch unwanted); name"
         let runner = SessionSyncProcess()
         let result = try runner.run(executable: "/bin/sh", arguments: ["-c", "printf '%s' " + SessionSyncFiles.shellQuote(value)])
