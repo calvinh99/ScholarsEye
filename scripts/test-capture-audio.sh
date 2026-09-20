@@ -7,6 +7,7 @@ trap 'rm -rf "$TEST_DIR"' EXIT
   -module-cache-path "$PROJECT_ROOT/build/module-cache" \
   -sdk "$(/usr/bin/xcrun --show-sdk-path)" \
   "$PROJECT_ROOT/apps/macos/ScholarsEye/CaptureModels.swift" \
+  "$PROJECT_ROOT/apps/macos/ScholarsEye/SessionLibrary.swift" \
   "$PROJECT_ROOT/apps/macos/ScholarsEye/RecordingDiagnostics.swift" \
   "$PROJECT_ROOT/apps/macos/ScholarsEye/CaptureEngine.swift" \
   "$PROJECT_ROOT/tests/CaptureAudioTests.swift" \

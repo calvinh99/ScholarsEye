@@ -21,8 +21,11 @@ struct MainView: View {
     @State private var busy = false
     @State private var showSettings = false
     @State private var showDetails = false
+    @State private var libraryDate = Date()
+    @State private var pendingDeletion: RecordingSession?
+    @State private var showDeletionConfirmation = false
+    @State private var deletionError: String?
     @State private var analysisMessages: [String: String] = [:]
-    @State private var analyzing: Set<String> = []
     @State private var analyzed: Set<String> = []
     @State private var savedDiagnostics: [String: RecordingDiagnosticsSnapshot] = [:]
 
@@ -56,11 +59,27 @@ struct MainView: View {
         .preferredColorScheme(.light)
         .tint(Paper.ink)
         .onAppear {
+            libraryDate = Date()
             recorder.refreshSessions()
             for session in recorder.sessions {
                 analysisMessages[session.id] = reportSummary(session.url)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in libraryDate = Date() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in libraryDate = Date() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            libraryDate = Date()
+            if !recording && !unavailable { recorder.refreshSessions() }
+        }
+        .alert("Move session to Trash?", isPresented: $showDeletionConfirmation, presenting: pendingDeletion) { session in
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+            Button("Move to Trash", role: .destructive) { deleteSession(session) }
+        } message: { session in
+            Text("The session from \(session.startedAt.formatted(date: .abbreviated, time: .shortened)) and its saved files can be recovered from Trash.")
+        }
+        .alert("Couldn’t delete session", isPresented: Binding(get: { deletionError != nil }, set: { if !$0 { deletionError = nil } })) {
+            Button("OK", role: .cancel) { deletionError = nil }
+        } message: { Text(deletionError ?? "") }
         .onChange(of: selectedSession) { _, _ in
             showDetails = false
             loadSelectedDiagnostics()
@@ -94,7 +113,7 @@ struct MainView: View {
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { selectedSession = nil }
             } label: {
                 HStack(spacing: 10) {
-                    SketchGlyph(kind: .plus).frame(width: 18, height: 18)
+                    Image(systemName: "plus").font(.system(size: 15, weight: .medium)).frame(width: 18, height: 18)
                     Text(recording ? "Current session" : "New session").fontWeight(.medium)
                     Spacer()
                 }.padding(.horizontal, 12).padding(.vertical, 10)
@@ -110,26 +129,16 @@ struct MainView: View {
                 .padding(.horizontal, 22).padding(.top, 31).padding(.bottom, 12)
 
             ScrollView {
-                LazyVStack(spacing: 3) {
-                    ForEach(recorder.sessions) { session in
-                        Button {
-                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { selectedSession = session.id }
-                        } label: {
-                            HStack(alignment: .top, spacing: 10) {
-                                SketchGlyph(kind: .page).frame(width: 17, height: 20).padding(.top, 1)
-                                    .foregroundStyle(selectedSession == session.id ? Paper.ink : Paper.muted)
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text(session.startedAt.formatted(.dateTime.month(.abbreviated).day()) + " · " + session.startedAt.formatted(date: .omitted, time: .shortened))
-                                        .font(.system(size: 12, weight: selectedSession == session.id ? .semibold : .regular))
-                                    Text(session.status == "recording" || session.status == "paused" ? "In progress" : "\(duration(session.durationSeconds)) · \(bytes(session.bytesWritten))")
-                                        .font(.system(size: 10)).foregroundStyle(Paper.muted)
-                                }
-                                Spacer(minLength: 0)
-                            }.padding(.horizontal, 12).padding(.vertical, 11)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(selectedSession == session.id ? Color.black.opacity(0.065) : .clear, in: RoundedRectangle(cornerRadius: 6))
-                        }.buttonStyle(NotebookRowStyle()).disabled(recording)
-                            .accessibilityLabel("Session \(session.startedAt.formatted(date: .abbreviated, time: .shortened)), \(duration(session.durationSeconds))")
+                LazyVStack(alignment: .leading, spacing: 3) {
+                    ForEach(SessionLibrary.groups(for: recorder.sessions, now: libraryDate)) { group in
+                        Section {
+                            ForEach(group.sessions) { session in sessionRow(session) }
+                        } header: {
+                            Text(group.title).font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(Paper.muted)
+                                .padding(.horizontal, 12).padding(.top, 13).padding(.bottom, 5)
+                                .accessibilityAddTraits(.isHeader)
+                        }
                     }
                     if recorder.sessions.isEmpty {
                         Text("A fresh page.").font(.system(size: 12)).foregroundStyle(Paper.muted)
@@ -138,21 +147,51 @@ struct MainView: View {
                 }.padding(.horizontal, 10)
             }
             Spacer(minLength: 12)
-            Button { NSWorkspace.shared.open(AppPaths.recordings) } label: {
-                HStack(spacing: 8) {
-                    SketchGlyph(kind: .folder).frame(width: 16, height: 16)
-                    Text("On this Mac").font(.system(size: 11))
-                    Spacer()
-                    Image(systemName: "arrow.up.right").font(.system(size: 9))
-                }.foregroundStyle(Paper.muted).padding(12)
-            }.buttonStyle(NotebookRowStyle()).help("Open recordings in Finder")
-                .padding(.horizontal, 10).padding(.bottom, 15)
+            HStack(spacing: 8) {
+                Button { showSettings.toggle() } label: {
+                    Label("Settings", systemImage: "gearshape")
+                        .font(.system(size: 11)).foregroundStyle(Paper.muted)
+                        .padding(.vertical, 8)
+                }.buttonStyle(NotebookRowStyle()).help("Settings (⌘,)")
+                    .keyboardShortcut(",", modifiers: .command)
+                    .popover(isPresented: $showSettings, arrowEdge: .leading) { settings }
+                Spacer()
+                UpdateStatusView(updates: updates, recording: recording || recorder.operationInProgress)
+            }.padding(.horizontal, 22).padding(.bottom, 20)
         }.frame(width: 226).background(Paper.sidebar)
+    }
+
+    private func sessionRow(_ session: RecordingSession) -> some View {
+        Button {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { selectedSession = session.id }
+        } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(session.startedAt.formatted(date: .omitted, time: .shortened))
+                    .font(.system(size: 12, weight: selectedSession == session.id ? .semibold : .regular))
+                Text(session.status == "recording" || session.status == "paused" ? "In progress" : "\(duration(session.durationSeconds)) · \(bytes(session.bytesWritten))")
+                    .font(.system(size: 10)).foregroundStyle(Paper.muted)
+            }.padding(.horizontal, 12).padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(selectedSession == session.id ? Color.black.opacity(0.065) : .clear, in: RoundedRectangle(cornerRadius: 6))
+        }.buttonStyle(NotebookRowStyle()).disabled(recording)
+            .accessibilityLabel("Session \(session.startedAt.formatted(date: .abbreviated, time: .shortened)), \(duration(session.durationSeconds))")
+            .contextMenu { sessionActions(session) }
+    }
+
+    @ViewBuilder
+    private func sessionActions(_ session: RecordingSession) -> some View {
+        Button("Reveal in Finder", systemImage: "arrow.up.right.square") {
+            NSWorkspace.shared.activateFileViewerSelecting([session.url])
+        }
+        Divider()
+        Button("Delete session…", systemImage: "trash", role: .destructive) {
+            pendingDeletion = session
+            showDeletionConfirmation = true
+        }.disabled(recording || unavailable || recorder.analyzingSessionIDs.contains(session.id) || updates.blocksRecording)
     }
 
     private var breadcrumb: some View {
         HStack(spacing: 8) {
-            SketchGlyph(kind: selected != nil && !recording ? .page : .record).frame(width: 15, height: 16)
             Text(selected != nil && !recording ? "Sessions" : "New session")
             if let session = selected, !recording {
                 Text("/").foregroundStyle(.tertiary)
@@ -163,8 +202,6 @@ struct MainView: View {
                 Circle().fill(recorder.state == .recording ? Color(red: 0.82, green: 0.28, blue: 0.22) : Paper.muted).frame(width: 6, height: 6)
                 Text(recorder.state == .paused ? "Paused" : recorder.state == .stopping ? "Saving…" : "Recording")
             }
-            UpdateStatusView(updates: updates, recording: recording || recorder.operationInProgress)
-                .padding(.leading, 8)
         }.font(.system(size: 11)).foregroundStyle(Paper.muted)
             .padding(.horizontal, 28).frame(height: 52)
             .overlay(alignment: .bottom) { Rectangle().fill(Paper.line.opacity(0.6)).frame(height: 1) }
@@ -180,12 +217,6 @@ struct MainView: View {
                         .font(.system(size: 12)).foregroundStyle(Paper.muted)
                 }
                 Spacer(minLength: 10)
-                if !recording {
-                    Button { showSettings.toggle() } label: {
-                        SketchGlyph(kind: .sliders).frame(width: 19, height: 19).padding(8)
-                    }.buttonStyle(NotebookRowStyle()).accessibilityLabel("Recording settings")
-                        .popover(isPresented: $showSettings, arrowEdge: .bottom) { recordingSettings }
-                }
             }
 
             VStack(spacing: 22) {
@@ -242,9 +273,25 @@ struct MainView: View {
         }
     }
 
+    private var settings: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Settings").font(.system(size: 14, weight: .semibold))
+            recordingSettings.disabled(recording || unavailable)
+            Divider()
+            VStack(alignment: .leading, spacing: 9) {
+                Text("Storage").font(.system(size: 11)).foregroundStyle(Paper.muted)
+                Button("Open recordings folder", systemImage: "arrow.up.right.square") {
+                    NSWorkspace.shared.open(recorder.storageURL)
+                }.buttonStyle(.link)
+                Text((recorder.storageURL.path as NSString).abbreviatingWithTildeInPath)
+                    .font(.system(size: 10)).foregroundStyle(Paper.muted)
+                    .textSelection(.enabled).lineLimit(2).truncationMode(.middle)
+            }
+        }.font(.system(size: 12)).padding(22).frame(width: 340)
+    }
+
     private var recordingSettings: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Recording settings").font(.system(size: 14, weight: .semibold))
             VStack(alignment: .leading, spacing: 8) {
                 Text("Compression").font(.system(size: 11)).foregroundStyle(Paper.muted)
                 Picker("Compression", selection: $compression) {
@@ -268,7 +315,7 @@ struct MainView: View {
                 Button(recorder.displays.isEmpty ? "Choose…" : "Refresh") { perform { await recorder.refreshDisplays() } }
             }
             Text("1 frame per second. Audio stays continuous.").font(.system(size: 10)).foregroundStyle(Paper.muted)
-        }.font(.system(size: 12)).padding(22).frame(width: 340).disabled(unavailable)
+        }
     }
 
     private func sessionDetail(_ session: RecordingSession) -> some View {
@@ -281,9 +328,10 @@ struct MainView: View {
                         .font(.system(size: 11)).foregroundStyle(Paper.muted)
                 }
                 Spacer()
-                Button { NSWorkspace.shared.open(session.url) } label: {
-                    SketchGlyph(kind: .folder).frame(width: 19, height: 19).padding(8)
-                }.buttonStyle(NotebookRowStyle()).accessibilityLabel("Open session folder").help("Open session folder")
+                Menu { sessionActions(session) } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 18)).frame(width: 32, height: 30)
+                }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .accessibilityLabel("Session actions").help("Session actions")
             }
             if session.status != "complete" {
                 Label(session.failureReason ?? "This recording was \(session.status). Open its folder to inspect saved files.", systemImage: "exclamationmark.triangle")
@@ -292,25 +340,43 @@ struct MainView: View {
             SessionPlayerView(session: session).id(session.id)
             DiagnosticsPanel(snapshot: savedDiagnostics[session.id], isLive: false)
             HStack(spacing: 8) {
-                if analyzing.contains(session.id) { ProgressView().controlSize(.mini) }
+                if recorder.analyzingSessionIDs.contains(session.id) { ProgressView().controlSize(.mini) }
                 else { Image(systemName: analysisMessages[session.id]?.hasPrefix("Media checked") == true ? "checkmark.circle" : "info.circle").font(.system(size: 11)) }
-                Text(analysisMessages[session.id] ?? "Saved locally")
+                Text(recorder.analyzingSessionIDs.contains(session.id) ? "Checking media…" : analysisMessages[session.id] ?? "Saved locally")
                     .lineLimit(2).textSelection(.enabled)
                 Spacer(minLength: 5)
-                Button { showDetails.toggle() } label: { Image(systemName: "ellipsis").frame(width: 24, height: 20) }
+                Button { showDetails.toggle() } label: { Image(systemName: "info.circle").frame(width: 24, height: 20) }
                     .buttonStyle(NotebookRowStyle()).accessibilityLabel("Session details")
                     .popover(isPresented: $showDetails) {
                         VStack(alignment: .leading, spacing: 14) {
                             Text("Session details").font(.headline)
                             Text("\(session.displayWidth) × \(session.displayHeight) · \(session.configuration.framesPerSecond) fps · \(session.configuration.codec.rawValue.uppercased())")
                             Text("\(session.chunks.count) media files · \(session.status)")
-                            Button("Check saved media") { runAnalysis(session) }.disabled(analyzing.contains(session.id))
+                            Button("Check saved media") { runAnalysis(session) }.disabled(recorder.analyzingSessionIDs.contains(session.id))
                             Button("Open analysis report") { NSWorkspace.shared.open(session.url.appendingPathComponent("analysis.json")) }
                                 .disabled(!FileManager.default.fileExists(atPath: session.url.appendingPathComponent("analysis.json").path))
                         }.font(.system(size: 12)).padding(22)
                     }
             }.font(.system(size: 10)).foregroundStyle(Paper.muted)
         }
+    }
+
+    private func deleteSession(_ session: RecordingSession) {
+        pendingDeletion = nil
+        guard !recording, !unavailable, !recorder.analyzingSessionIDs.contains(session.id), !updates.blocksRecording else {
+            deletionError = "Wait for recording, media checks, or updates to finish, then try again."
+            return
+        }
+        do {
+            let index = recorder.sessions.firstIndex { $0.id == session.id } ?? 0
+            try recorder.trashSession(session)
+            if selectedSession == session.id {
+                selectedSession = recorder.sessions.isEmpty ? nil : recorder.sessions[min(index, recorder.sessions.count - 1)].id
+            }
+            analysisMessages.removeValue(forKey: session.id)
+            savedDiagnostics.removeValue(forKey: session.id)
+            analyzed.remove(session.id)
+        } catch { deletionError = error.localizedDescription }
     }
 
     private func errorNotice(_ error: String) -> some View {
@@ -353,29 +419,33 @@ struct MainView: View {
             analysisMessages[session.id] = "Media check unavailable"
             return
         }
-        guard !analyzing.contains(session.id) else { return }
-        analyzed.insert(session.id)
-        analyzing.insert(session.id)
-        analysisMessages[session.id] = "Checking media…"
         let folder = session.url
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = [script, folder.path, "--output", folder.appendingPathComponent("analysis.json").path]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        // Register and launch on the main actor without suspension, so quitting
+        // can always terminate the report writer before the app exits.
+        guard recorder.beginSessionAnalysis(session, process: process) else { return }
+        do { try process.run() }
+        catch {
+            recorder.endSessionAnalysis(session.id)
+            analysisMessages[session.id] = "Media check unavailable: \(error.localizedDescription)"
+            return
+        }
+        analyzed.insert(session.id)
+        analysisMessages[session.id] = "Checking media…"
         Task {
             let message = await Task.detached(priority: .utility) { () -> String in
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-                process.arguments = [script, folder.path, "--output", folder.appendingPathComponent("analysis.json").path]
-                let output = Pipe()
-                process.standardOutput = output
-                process.standardError = output
-                do {
-                    try process.run()
-                    let data = output.fileHandleForReading.readDataToEndOfFile()
-                    process.waitUntilExit()
-                    if process.terminationStatus == 0 { return "Media checked" }
-                    return "Media check: " + String((String(data: data, encoding: .utf8) ?? "Unknown error").suffix(300))
-                } catch { return "Media check unavailable: \(error.localizedDescription)" }
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                if process.terminationStatus == 0 { return "Media checked" }
+                return "Media check: " + String((String(data: data, encoding: .utf8) ?? "Unknown error").suffix(300))
             }.value
             analysisMessages[session.id] = message == "Media checked" ? reportSummary(folder) ?? message : message
-            analyzing.remove(session.id)
+            recorder.endSessionAnalysis(session.id)
         }
     }
 
@@ -498,38 +568,5 @@ private struct PaperButtonStyle: ButtonStyle {
 private struct NotebookRowStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.contentShape(Rectangle()).opacity(configuration.isPressed ? 0.55 : 1)
-    }
-}
-
-private struct SketchGlyph: View {
-    enum Kind { case plus, page, folder, record, sliders }
-    let kind: Kind
-    var body: some View {
-        GeometryReader { geometry in
-            Path { path in
-                switch kind {
-                case .plus:
-                    path.move(to: CGPoint(x: 3, y: 10)); path.addLine(to: CGPoint(x: 18, y: 9.5))
-                    path.move(to: CGPoint(x: 10, y: 2)); path.addLine(to: CGPoint(x: 9.6, y: 18))
-                case .page:
-                    path.move(to: CGPoint(x: 4, y: 2)); path.addLines([CGPoint(x: 13, y: 1.6), CGPoint(x: 17, y: 6), CGPoint(x: 17.3, y: 18), CGPoint(x: 3, y: 18.5), CGPoint(x: 4, y: 2)])
-                    path.move(to: CGPoint(x: 12, y: 2)); path.addLines([CGPoint(x: 12, y: 6.5), CGPoint(x: 17, y: 6)])
-                    path.move(to: CGPoint(x: 6, y: 10)); path.addLine(to: CGPoint(x: 13, y: 9.7))
-                    path.move(to: CGPoint(x: 6, y: 14)); path.addLine(to: CGPoint(x: 12, y: 14.2))
-                case .folder:
-                    path.move(to: CGPoint(x: 2, y: 5)); path.addLines([CGPoint(x: 8, y: 4.5), CGPoint(x: 10, y: 7), CGPoint(x: 18, y: 6.5), CGPoint(x: 17.7, y: 17), CGPoint(x: 2.6, y: 17.5), CGPoint(x: 2, y: 5)])
-                    path.move(to: CGPoint(x: 3, y: 9)); path.addLine(to: CGPoint(x: 17, y: 8.7))
-                case .record:
-                    path.addEllipse(in: CGRect(x: 2.5, y: 2, width: 15.5, height: 16))
-                    path.addEllipse(in: CGRect(x: 7, y: 6.5, width: 7, height: 7.3))
-                case .sliders:
-                    for y in [5.0, 10.0, 15.0] { path.move(to: CGPoint(x: 2, y: y)); path.addLine(to: CGPoint(x: 18, y: y - 0.4)) }
-                    path.move(to: CGPoint(x: 7, y: 2)); path.addLine(to: CGPoint(x: 7.3, y: 7))
-                    path.move(to: CGPoint(x: 13, y: 7)); path.addLine(to: CGPoint(x: 12.7, y: 12))
-                    path.move(to: CGPoint(x: 8, y: 12)); path.addLine(to: CGPoint(x: 8.4, y: 18))
-                }
-            }.transform(CGAffineTransform(scaleX: geometry.size.width / 20, y: geometry.size.height / 20))
-                .stroke(style: StrokeStyle(lineWidth: 1.25, lineCap: .round, lineJoin: .round))
-        }.accessibilityHidden(true)
     }
 }

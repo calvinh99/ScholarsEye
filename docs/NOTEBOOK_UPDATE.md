@@ -4,7 +4,7 @@ Implemented September 17, 2026. This adds to the native recorder; AI question ge
 
 ## Interface and identity
 
-- White/gray notebook layout, compact session rows, hand-drawn navigation marks, and reduced explanatory copy.
+- White/gray notebook layout, compact session rows, restrained system icons, and reduced explanatory copy. The doodled eye remains the visual signature.
 - Childlike crayon eye app icon and scalable native companion mark. The eye blinks briefly about every six seconds while idle, respects Reduce Motion, and stays static during capture.
 - Artwork, native icon packaging, and the built-in image-generation prompts are documented in [the branding notes](../assets/branding/README.md).
 
@@ -50,3 +50,17 @@ zsh scripts/test-session-player.sh
 ```
 
 The playback test generates its own temporary media fixture; optional explicit recording-folder arguments audit existing sessions. Native codec services must be available to the test process. A restricted shell sandbox can produce AVFoundation decoding errors even on known-good source media; the same checks passed with normal host media-service access.
+
+## Session library refinement — September 20, 2026
+
+Sessions are grouped by local calendar day, newest first. Headings show Today, 1d ago through 6d ago, then a date (including the year when needed). Rows show the time, duration, and file size without a document glyph. Labels refresh when the day/time zone changes or the app becomes active.
+
+Settings lives in the sidebar footer, with the recordings-folder shortcut under Storage and the existing compression, codec, and display controls above it. Command-comma also opens Settings. Capture controls lock during recording while the storage shortcut stays available. The highlighted update button occupies the footer's right side.
+
+A session's ellipsis menu and sidebar context menu contain Reveal in Finder and Delete session. Deletion asks for confirmation, moves the whole folder to macOS Trash, and selects a neighboring session. Finder's Put Back restores it. Capture transitions and media analysis block deletion; the controller owns analysis locks so closing a window cannot bypass them. Quitting terminates and waits for active report writers before releasing those locks. Only direct library child directories with matching manifests may be trashed; symbolic links and unsafe paths are rejected.
+
+The app icon uses the same crayon eye on a subtle beige tile. The original white artwork remains in the repository alongside the image-generated beige edit.
+
+Computer-use validation used an isolated library of copied sessions spanning Today, recent days, a week ago, and the previous year. Verified Settings and its Finder shortcut, playback, cancelling deletion, moving a playing session to Trash, automatic selection/player reset, and recovery with Finder Put Back. A short capture was paused and saved with a successful media check; the session context menu disabled Delete while paused. A controlled media check also disabled Delete until completion. An older-version test build discovered the actual public release and showed the gold update icon in the new footer position. A final quit-during-analysis journey confirmed the child process exited and the existing report stayed unchanged. Hashes of all 31 pre-existing recording files remained unchanged.
+
+Regression checks: `scripts/test-session-library.sh` covers calendar/DST boundaries, safe Trash targets, manifest identity, shared analysis locks, and real child-process shutdown; capture-audio, session-player, and updater suites pass. The playback suite needs access to the host's native codec services.

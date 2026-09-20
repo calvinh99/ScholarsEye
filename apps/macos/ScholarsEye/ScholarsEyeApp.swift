@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var recorder: CaptureController?
     private var terminationPending = false
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationWillTerminate(_ notification: Notification) {
+        recorder?.cancelSessionAnalyses()
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let recorder else { return .terminateNow }
         guard recorder.state != .idle || recorder.operationInProgress else { return .terminateNow }

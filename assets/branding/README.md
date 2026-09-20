@@ -1,7 +1,9 @@
 # ScholarsEye artwork
 
 `ScholarsEyeArtwork.png` is the original generated artwork, retained unchanged.
-`ScholarsEyeAppIcon.png` packages it inside smooth native rounded tile bounds;
+`ScholarsEyeArtworkBeige.png` is the current background-only edit, preserving the
+liked black crayon eye on a subtle warm beige canvas (approximately `#F4EFE5`).
+`ScholarsEyeAppIcon.png` packages the beige artwork inside smooth native rounded tile bounds;
 `package-icon.swift` is the deterministic native packaging source. The cached
 `ScholarsEye.icns` was created with Apple's `sips` and `iconutil` and contains all
 standard and Retina icon sizes. The normal build copies this icon into the app
@@ -62,3 +64,24 @@ Final edit prompt (eliminates the generated transparency mask's perimeter flecks
 > native macOS icon separately. 1024x1024.
 
 The generated artwork is 1254×1254. The packaged PNG is 1024×1024 RGBA.
+
+## Beige background edit
+
+Tool: built-in `image_gen` edit (not the API/CLI fallback), 2026-09-20.
+Edit target: `ScholarsEyeArtwork.png`; original remains unchanged.
+Output: `ScholarsEyeArtworkBeige.png`, then native packaging into
+`ScholarsEyeAppIcon.png` and all-size `ScholarsEye.icns`.
+
+Final prompt:
+
+> Use case: precise-object-edit. Asset type: existing ScholarsEye macOS application
+> logo artwork. Image 1 is the edit target. Change ONLY the plain white background
+> to a solid, very subtle warm beige approximately #F4EFE5, including the negative
+> space within the eye. Preserve the existing black child-drawn crayon eye exactly:
+> same uneven oval outline, same pupil, all five upper eyelashes, all three lower
+> eyelashes, same position, same proportions, same size, same black crayon grain
+> and flecked stroke edges. Do not redraw, smooth, stylize, enlarge, shrink, or
+> otherwise change the eye. Keep the canvas square, opaque, with the warm beige
+> color extending fully to every edge. No transparency, no border, no rounded
+> tile shape, no gradient, no shadows, no text, no new marks, no added paper
+> texture. This artwork will be packaged as a native rounded macOS icon separately.

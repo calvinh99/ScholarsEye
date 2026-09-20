@@ -17,6 +17,7 @@ final class CaptureController: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var stats = CaptureStats()
     @Published private(set) var sessions: [RecordingSession] = []
+    @Published private(set) var analyzingSessionIDs: Set<String> = []
     @Published private(set) var diagnostics: RecordingDiagnosticsSnapshot?
 
     let storageURL: URL
@@ -31,6 +32,8 @@ final class CaptureController: ObservableObject {
     private var stopWaiterCount = 0
     private var diagnosticsSampler: RecordingDiagnosticsSampler?
     private var diagnosticsSessionID: String?
+    private var analysisProcesses: [String: Process] = [:]
+    private var analysisShutdownRequested = false
 
     init(storageURL: URL) {
         self.storageURL = storageURL
@@ -252,6 +255,42 @@ final class CaptureController: ObservableObject {
             }
             return session
         }.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    func beginSessionAnalysis(_ session: RecordingSession, process: Process? = nil) -> Bool {
+        guard !analysisShutdownRequested, !analyzingSessionIDs.contains(session.id), sessions.contains(where: {
+            $0.id == session.id && $0.url.standardizedFileURL == session.url.standardizedFileURL
+        }) else { return false }
+        analyzingSessionIDs.insert(session.id)
+        if let process { analysisProcesses[session.id] = process }
+        return true
+    }
+
+    func endSessionAnalysis(_ id: String) {
+        analysisProcesses.removeValue(forKey: id)
+        analyzingSessionIDs.remove(id)
+    }
+
+    /// Called during application termination. The Python analysis writer must
+    /// exit before this app releases its locks and a relaunched copy can delete
+    /// a session. Cancelling a Swift Task alone does not terminate its Process.
+    func cancelSessionAnalyses() {
+        analysisShutdownRequested = true
+        let processes = Array(analysisProcesses.values)
+        for process in processes where process.isRunning { process.terminate() }
+        for process in processes where process.isRunning { process.waitUntilExit() }
+        analysisProcesses.removeAll()
+        analyzingSessionIDs.removeAll()
+    }
+
+    func trashSession(_ session: RecordingSession) throws {
+        guard state == .idle, !operationInProgress else { throw SessionLibraryError.captureInProgress }
+        guard !analyzingSessionIDs.contains(session.id) else { throw SessionLibraryError.analysisInProgress }
+        guard sessions.contains(where: {
+            $0.id == session.id && $0.url.standardizedFileURL == session.url.standardizedFileURL
+        }) else { throw SessionLibraryError.sessionMissing }
+        try SessionLibrary.trash(session, storageURL: storageURL)
+        refreshSessions()
     }
 
     private func makeStream(display: SCDisplay, configuration: CaptureConfiguration, worker: RecordingWorker) throws -> SCStream {

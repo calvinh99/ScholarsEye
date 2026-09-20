@@ -7,7 +7,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-let sourceURL = directory.appendingPathComponent("ScholarsEyeArtwork.png")
+let sourceURL = directory.appendingPathComponent("ScholarsEyeArtworkBeige.png")
 let outputURL = directory.appendingPathComponent("ScholarsEyeAppIcon.png")
 guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
       let artwork = CGImageSourceCreateImageAtIndex(source, 0, nil),
@@ -20,7 +20,7 @@ canvas.interpolationQuality = .high
 let tile = CGRect(x: 64, y: 64, width: 896, height: 896)
 canvas.addPath(CGPath(roundedRect: tile, cornerWidth: 200, cornerHeight: 200, transform: nil))
 canvas.clip()
-canvas.setFillColor(CGColor(gray: 1, alpha: 1))
+canvas.setFillColor(CGColor(red: 244.0 / 255, green: 239.0 / 255, blue: 229.0 / 255, alpha: 1))
 canvas.fill(tile)
 canvas.draw(artwork, in: tile)
 guard let icon = canvas.makeImage(),

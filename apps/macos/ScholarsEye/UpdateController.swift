@@ -542,7 +542,7 @@ struct UpdateStatusView: View {
         .contextMenu {
             Button("Update details…") { updates.showDetails = true }
         }
-        .popover(isPresented: $updates.showDetails, arrowEdge: .top) {
+        .popover(isPresented: $updates.showDetails, arrowEdge: .leading) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("ScholarsEye \(updates.currentVersion)").font(.headline)
                 Text(updates.message).fixedSize(horizontal: false, vertical: true)
