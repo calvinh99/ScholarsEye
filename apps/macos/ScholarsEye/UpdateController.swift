@@ -262,7 +262,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
         guard installIntent == .refreshing else { return }
         guard !recordingIsActive(), let updater else {
             presentFailure(NSError(domain: "ScholarsEye.Update", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "The update check could not start. Finish saving any recording and try again."]))
+                userInfo: [NSLocalizedDescriptionKey: "The update check could not start. Finish recording or syncing and try again."]))
             return
         }
         guard claimInstallRefreshReadiness(sessionInProgress: updater.sessionInProgress,
@@ -399,7 +399,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
         guard userAuthorizedInstallation, !recordingIsActive() else {
             reply(.skip)
             phase = .failed
-            message = "Finish saving your recording before installing an update."
+            message = "Finish recording or syncing before installing an update."
             return
         }
         phase = .installing
@@ -493,6 +493,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUserDriver, SPUUpda
 struct UpdateStatusView: View {
     @ObservedObject var updates: UpdateController
     let recording: Bool
+    var syncing = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var token = ""
     @State private var hovering = false
@@ -500,6 +501,7 @@ struct UpdateStatusView: View {
     private var updateAvailable: Bool { updates.phase == .available }
     private var tooltip: String {
         if updateAvailable {
+            if syncing { return "Update available. Finish or cancel syncing, then click to update." }
             return recording ? "Update available. Stop and save your recording, then click to update."
                 : "Update to \(updates.availableVersion ?? "the latest version") and restart"
         }
@@ -518,7 +520,8 @@ struct UpdateStatusView: View {
 
     var body: some View {
         Button {
-            if updateAvailable && !recording { updates.installUpdate() }
+            if updateAvailable && !recording && !syncing { updates.installUpdate() }
+            else if syncing { updates.showDetails = true }
             else { updates.checkForUpdates() }
         } label: {
             ZStack {
@@ -566,6 +569,9 @@ struct UpdateStatusView: View {
                 if updates.phase == .available && recording {
                     Text("Stop and save your recording before updating.").foregroundStyle(.secondary)
                 }
+                if syncing {
+                    Text("Finish or cancel syncing before updating.").foregroundStyle(.secondary)
+                }
                 if !updates.releaseNotes.isEmpty {
                     ScrollView { Text(updates.releaseNotes).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }
                         .frame(maxHeight: 160)
@@ -573,11 +579,11 @@ struct UpdateStatusView: View {
                 if let progress = updates.progress { ProgressView(value: progress) }
                 if updates.phase == .available {
                     Button("Update & restart") { updates.installUpdate() }
-                        .disabled(recording || !updates.canInstall)
+                        .disabled(recording || syncing || !updates.canInstall)
                 } else if updates.canCancel {
                     Button("Cancel update") { updates.cancel() }
                 } else if updates.canRetryRestart {
-                    Button("Restart now") { updates.retryRelaunch() }.disabled(recording)
+                    Button("Restart now") { updates.retryRelaunch() }.disabled(recording || syncing)
                 } else if updates.configured && !updates.isBusy && !updates.requiresGitHubConnection {
                     Button("Check again") { updates.checkForUpdates() }
                 }

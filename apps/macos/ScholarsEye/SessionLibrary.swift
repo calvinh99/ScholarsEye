@@ -8,12 +8,13 @@ struct SessionDayGroup: Identifiable {
 }
 
 enum SessionLibraryError: LocalizedError, Equatable {
-    case captureInProgress, analysisInProgress, sessionMissing, unsafeLocation, invalidManifest, identityChanged
+    case captureInProgress, analysisInProgress, syncInProgress, sessionMissing, unsafeLocation, invalidManifest, identityChanged
 
     var errorDescription: String? {
         switch self {
         case .captureInProgress: return "Stop and save your recording before moving a session to Trash."
         case .analysisInProgress: return "Wait for this session's analysis to finish before moving it to Trash."
+        case .syncInProgress: return "Finish or cancel syncing before moving a session to Trash."
         case .sessionMissing: return "This session is no longer in the library. Refresh and try again."
         case .unsafeLocation: return "Only session folders directly inside the recording library can be moved to Trash. Linked folders are not supported."
         case .invalidManifest: return "The session information is missing or unreadable. Its files have not been moved."

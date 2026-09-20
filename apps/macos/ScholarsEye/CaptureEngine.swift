@@ -71,6 +71,7 @@ final class CaptureController: ObservableObject {
     @Published private(set) var stats = CaptureStats()
     @Published private(set) var sessions: [RecordingSession] = []
     @Published private(set) var analyzingSessionIDs: Set<String> = []
+    @Published private(set) var syncInProgress = false
     @Published private(set) var diagnostics: RecordingDiagnosticsSnapshot?
 
     let storageURL: URL
@@ -149,7 +150,8 @@ final class CaptureController: ObservableObject {
     }
 
     func start(configuration: CaptureConfiguration) async {
-        guard state == .idle, !operationInProgress, stopWaiterCount == 0 else { return }
+        guard !analysisShutdownRequested, state == .idle, !operationInProgress,
+              !syncInProgress, stopWaiterCount == 0 else { return }
         operationInProgress = true
         errorMessage = nil
         diagnostics = nil
@@ -353,7 +355,7 @@ final class CaptureController: ObservableObject {
     }
 
     func beginSessionAnalysis(_ session: RecordingSession, process: Process? = nil) -> Bool {
-        guard !analysisShutdownRequested, !analyzingSessionIDs.contains(session.id), sessions.contains(where: {
+        guard !analysisShutdownRequested, !syncInProgress, !analyzingSessionIDs.contains(session.id), sessions.contains(where: {
             $0.id == session.id && $0.url.standardizedFileURL == session.url.standardizedFileURL
         }) else { return false }
         analyzingSessionIDs.insert(session.id)
@@ -366,11 +368,24 @@ final class CaptureController: ObservableObject {
         analyzingSessionIDs.remove(id)
     }
 
+    /// Shared by all windows; release after transfer processes and finalization stop.
+    func beginSessionSync() -> Bool {
+        guard !analysisShutdownRequested, !syncInProgress, state == .idle,
+              !operationInProgress, analyzingSessionIDs.isEmpty else { return false }
+        syncInProgress = true
+        return true
+    }
+
+    func endSessionSync() { syncInProgress = false }
+
+    /// Keep new work blocked while an asynchronous quit drains child processes.
+    func prepareForTermination() { analysisShutdownRequested = true }
+
     /// Called during application termination. The Python analysis writer must
     /// exit before this app releases its locks and a relaunched copy can delete
     /// a session. Cancelling a Swift Task alone does not terminate its Process.
     func cancelSessionAnalyses() {
-        analysisShutdownRequested = true
+        prepareForTermination()
         let processes = Array(analysisProcesses.values)
         for process in processes where process.isRunning { process.terminate() }
         for process in processes where process.isRunning { process.waitUntilExit() }
@@ -379,6 +394,7 @@ final class CaptureController: ObservableObject {
     }
 
     func trashSession(_ session: RecordingSession) throws {
+        guard !syncInProgress else { throw SessionLibraryError.syncInProgress }
         guard state == .idle, !operationInProgress else { throw SessionLibraryError.captureInProgress }
         guard !analyzingSessionIDs.contains(session.id) else { throw SessionLibraryError.analysisInProgress }
         guard sessions.contains(where: {

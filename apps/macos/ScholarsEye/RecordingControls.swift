@@ -6,6 +6,7 @@ struct RecordingControls: View {
     let elapsed: Double
     let busy: Bool
     let updateInProgress: Bool
+    let syncInProgress: Bool
     let start: () -> Void
     let pauseOrResume: () -> Void
     let stop: () -> Void
@@ -39,9 +40,10 @@ struct RecordingControls: View {
                     .padding(.horizontal, 12)
                 }
                 .buttonStyle(RecordingHeaderButtonStyle(prominent: true))
-                .disabled(busy || updateInProgress)
+                .disabled(busy || updateInProgress || syncInProgress)
                 .accessibilityLabel(busy ? "Starting recording" : "Record")
-                .help(updateInProgress ? "Wait for the update to finish before recording." : "Record a learning session")
+                .help(syncInProgress ? "Finish or cancel syncing before recording."
+                      : updateInProgress ? "Wait for the update to finish before recording." : "Record a learning session")
             } else {
                 HStack(spacing: 10) {
                     HStack(spacing: 6) {

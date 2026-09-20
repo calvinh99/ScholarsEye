@@ -11,6 +11,7 @@ private enum Paper {
 struct MainView: View {
     @ObservedObject var recorder: CaptureController
     @ObservedObject var updates: UpdateController
+    @ObservedObject var sync: SyncController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("recording.microphone") private var microphone = true
     @AppStorage("recording.systemAudio") private var systemAudio = false
@@ -36,7 +37,7 @@ struct MainView: View {
     }
     private var recording: Bool { recorder.state != .idle }
     private var selected: RecordingSession? { recorder.sessions.first { $0.id == selectedSession } }
-    private var unavailable: Bool { busy || recorder.operationInProgress }
+    private var unavailable: Bool { busy || recorder.operationInProgress || recorder.syncInProgress }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -160,6 +161,14 @@ struct MainView: View {
                 }.padding(.horizontal, 10)
             }
             Spacer(minLength: 12)
+            if sync.isSyncing {
+                Button { page = .settings } label: {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.mini)
+                        Text("Syncing sessions…").font(.system(size: 11)).foregroundStyle(Paper.muted)
+                    }.padding(.horizontal, 22).padding(.bottom, 12)
+                }.buttonStyle(.plain).accessibilityLabel("Show session sync progress")
+            }
             HStack(spacing: 8) {
                 Button { page = .settings; showDetails = false } label: {
                     Label("Settings", systemImage: "gearshape")
@@ -170,7 +179,8 @@ struct MainView: View {
                 }.buttonStyle(NotebookRowStyle()).help("Settings (⌘,)")
                     .keyboardShortcut(",", modifiers: .command)
                 Spacer()
-                UpdateStatusView(updates: updates, recording: recording || recorder.operationInProgress)
+                UpdateStatusView(updates: updates, recording: recording || recorder.operationInProgress,
+                                 syncing: recorder.syncInProgress)
             }.padding(.horizontal, 22).padding(.bottom, 20)
         }.frame(width: 226).background(Paper.sidebar)
     }
@@ -215,7 +225,8 @@ struct MainView: View {
             }.font(.system(size: 11)).foregroundStyle(Paper.muted).lineLimit(1)
             Spacer(minLength: 8)
             RecordingControls(state: recorder.state, elapsed: recorder.stats.durationSeconds,
-                              busy: unavailable, updateInProgress: updates.blocksRecording,
+                              busy: busy || recorder.operationInProgress, updateInProgress: updates.blocksRecording,
+                              syncInProgress: recorder.syncInProgress,
                               start: startRecording,
                               pauseOrResume: {
                                   perform { if recorder.state == .paused { await recorder.resume() } else { await recorder.pause() } }
@@ -295,6 +306,11 @@ struct MainView: View {
                     Text((recorder.storageURL.path as NSString).abbreviatingWithTildeInPath)
                         .font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled)
                 }
+
+                SyncSettingsView(sync: sync,
+                                 unavailable: recording || busy || recorder.operationInProgress
+                                    || updates.blocksRecording || !recorder.analyzingSessionIDs.isEmpty,
+                                 localStorageURL: recorder.storageURL)
             }.formStyle(.grouped).scrollContentBackground(.hidden)
                 .toggleStyle(.switch).controlSize(.small)
                 .frame(maxWidth: 700, maxHeight: .infinity, alignment: .topLeading)

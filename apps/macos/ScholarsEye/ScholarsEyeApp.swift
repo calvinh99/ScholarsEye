@@ -9,15 +9,26 @@ enum AppPaths {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var recorder: CaptureController?
+    var sync: SyncController?
     private var terminationPending = false
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) {
         recorder?.cancelSessionAnalyses()
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if terminationPending { return .terminateLater }
+        if let sync, sync.isSyncing {
+            terminationPending = true
+            recorder?.prepareForTermination()
+            Task {
+                await sync.cancelAndWait()
+                terminationPending = false
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+            return .terminateLater
+        }
         guard let recorder else { return .terminateNow }
         guard recorder.state != .idle || recorder.operationInProgress else { return .terminateNow }
-        if terminationPending { return .terminateLater }
         let alert = NSAlert()
         alert.messageText = "Finish your recording before quitting?"
         alert.informativeText = "Your completed recording will remain saved on this Mac."
@@ -37,17 +48,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct ScholarsEyeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @StateObject private var recorder = CaptureController(storageURL: AppPaths.recordings)
+    @StateObject private var recorder: CaptureController
+    @StateObject private var sync: SyncController
     @StateObject private var updates = UpdateController()
+
+    init() {
+        let capture = CaptureController(storageURL: AppPaths.recordings)
+        _recorder = StateObject(wrappedValue: capture)
+        _sync = StateObject(wrappedValue: SyncController(recorder: capture))
+    }
 
     var body: some Scene {
         WindowGroup("ScholarsEye") {
-            MainView(recorder: recorder, updates: updates)
+            MainView(recorder: recorder, updates: updates, sync: sync)
                 .onAppear {
                     delegate.recorder = recorder
+                    delegate.sync = sync
+                    sync.updateIsInProgress = { [weak updates] in updates?.blocksRecording ?? true }
                     updates.start { [weak recorder] in
                         guard let recorder else { return true }
-                        return recorder.state != .idle || recorder.operationInProgress
+                        return recorder.state != .idle || recorder.operationInProgress || recorder.syncInProgress
                     }
                 }
         }
@@ -77,7 +97,7 @@ struct ScholarsEyeApp: App {
             Button(updates.phase == .available ? updates.buttonTitle : "Check for Updates…") {
                 if updates.phase == .available { updates.installUpdate() }
                 else { updates.checkForUpdates() }
-            }.disabled(updates.isBusy || (updates.phase == .available && (recorder.state != .idle || recorder.operationInProgress)))
+            }.disabled(updates.isBusy || (updates.phase == .available && (recorder.state != .idle || recorder.operationInProgress || recorder.syncInProgress)))
             Button("Show ScholarsEye") {
                 NSApp.activate(ignoringOtherApps: true)
                 NSApp.windows.first(where: { $0.canBecomeMain })?.makeKeyAndOrderFront(nil)

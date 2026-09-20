@@ -24,7 +24,7 @@ open build/ScholarsEye.app
 
 The development build stores recordings in `runtime/recordings` under this checkout. It requests screen/microphone permission only when starting capture or explicitly choosing a display. Video defaults to hardware HEVC at 1 fps; H.264 and three compression presets are selectable. Microphone and optional system audio are separate AAC tracks.
 
-The native interface uses a monochrome notebook style and a hand-drawn eye. Start a session, pause/resume as needed, then Stop & Save to open it in the built-in player. Playback joins saved chunks, skips manual pause gaps, supports seeking and replay, and lets you mute microphone/system audio independently. Expand the video into a resizable window with native fullscreen controls to inspect small code and maths. Recordings are read directly from disk; playback does not create another permanent video copy. Automatic video-frame OCR is disabled.
+The native interface uses a monochrome notebook style and a hand-drawn eye. Recording controls stay in the header while you browse saved sessions or Settings. Recording preferences persist between launches. Start a session, pause/resume as needed, then Stop & Save; select the saved session in the sidebar to play it. Playback joins saved chunks, skips manual pause gaps, supports seeking and replay, and lets you mute microphone/system audio independently. Expand the video into a resizable window with native fullscreen controls to inspect small code and maths. Recordings are read directly from disk; playback does not create another permanent video copy. Automatic video-frame OCR is disabled.
 
 New sessions include a compact CPU/RAM panel with duration-weighted averages, observed peaks, and small plots. Native process counters are sampled every five seconds while recording; pauses are excluded and measurements persist in `diagnostics.json`. CPU 100% means one core. RAM is resident memory. These metrics cover the ScholarsEye process, not all system capture/encoder work; power consumption is not displayed. Older sessions show that resource measurements are unavailable. Charts retain at most 240 points while aggregate averages use all valid intervals.
 
@@ -34,6 +34,7 @@ After Stop, the local analysis script checks the saved media and prepares conser
 zsh scripts/test-capture-audio.sh
 zsh scripts/test-recording-diagnostics.sh
 zsh scripts/test-session-player.sh
+zsh scripts/test-session-sync.sh
 python3 -m unittest discover -s tests -p 'test_*.py'
 python3 scripts/analyze_recording.py /absolute/path/to/a/completed/session
 ```
@@ -42,6 +43,12 @@ Generated recordings, build output, and local test media are ignored by `.gitign
 
 ## Install and update
 
-See [installation](docs/INSTALL.md) for the portable Apple silicon ZIP and [updates](docs/UPDATES.md) for release publishing. Portable copies download signed updates from the public GitHub release feed, with no account or token. They check at launch and about once an hour, then highlight a gold update arrow at the top right. After saving any recording, click the arrow to fetch the newest release, install, and restart. Stopping a recording never triggers an update automatically. Development builds are updated by rebuilding, so automatic installation cannot replace their development storage configuration.
+See [installation](docs/INSTALL.md) for the portable Apple silicon ZIP and [updates](docs/UPDATES.md) for release publishing. Portable copies download signed updates from the public GitHub release feed, with no account or token. They check at launch and about once an hour, then highlight a gold update arrow beside Settings in the sidebar footer. After saving any recording, click the arrow to fetch the newest release, install, and restart. Stopping a recording never triggers an update automatically. Development builds are updated by rebuilding, so automatic installation cannot replace their development storage configuration.
 
 Publishing requires incrementing both version and build in `config/release.json` and pushing to `main`. Source-only commits do not announce an update. Recordings and signing credentials are excluded from the repository and release packages.
+
+## Share sessions through the Mac mini
+
+Configure the master server in Settings to sync saved sessions in both directions over SSH. The MacBook can use its existing `macmini` SSH alias over Tailscale; no cloud media bucket or public server is needed. Sync is manual and copies the compressed original files without transcoding. See [master server setup](docs/SYNC.md) for the SSH configuration, folder paths, and transfer behavior.
+
+For this development Mac mini, the shared folder is `/Users/calvin/ScholarsEye/runtime/recordings`. Portable app installations use `~/Movies/ScholarsEye` locally. These are separate libraries; choose the mini folder that contains the sessions you intend to share.
