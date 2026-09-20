@@ -9,10 +9,63 @@ private enum CaptureError: LocalizedError {
     var errorDescription: String? { if case let .message(message) = self { return message }; return nil }
 }
 
+struct CaptureDisplaySnapshot {
+    let sources: [SCDisplay]
+    let displays: [CaptureDisplay]
+}
+
+@MainActor
+struct CaptureDisplayDiscovery {
+    var hasScreenAccess: () -> Bool
+    var load: () async throws -> CaptureDisplaySnapshot
+    var mainDisplayID: () -> UInt32?
+    var localDisplays: () -> [CaptureDisplay]
+
+    static let system = CaptureDisplayDiscovery(
+        hasScreenAccess: { CGPreflightScreenCaptureAccess() },
+        load: {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let displays = content.displays.enumerated().map { index, display in
+                let name = NSScreen.screens.first {
+                    ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
+                }?.localizedName ?? "Display \(index + 1)"
+                return CaptureDisplay(id: display.displayID, name: name, width: display.width, height: display.height)
+            }
+            return CaptureDisplaySnapshot(sources: content.displays, displays: displays)
+        },
+        mainDisplayID: { CGMainDisplayID() },
+        localDisplays: {
+            NSScreen.screens.compactMap { screen in
+                guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else { return nil }
+                return CaptureDisplay(id: id, name: screen.localizedName,
+                    width: CGDisplayPixelsWide(id), height: CGDisplayPixelsHigh(id))
+            }
+        }
+    )
+}
+
+enum CaptureDisplaySelection {
+    static func choose(available: [UInt32], selected: UInt32?, preferred: UInt32?, main: UInt32?) -> UInt32? {
+        for candidate in [selected, preferred, main].compactMap({ $0 }) {
+            if available.contains(candidate) { return candidate }
+        }
+        return available.first
+    }
+}
+
 @MainActor
 final class CaptureController: ObservableObject {
     @Published var displays: [CaptureDisplay] = []
-    @Published var selectedDisplayID: UInt32?
+    @Published var selectedDisplayID: UInt32? {
+        didSet {
+            guard !applyingDiscoveredSelection, let selectedDisplayID,
+                  displays.contains(where: { $0.id == selectedDisplayID }) else { return }
+            preferredDisplayID = selectedDisplayID
+            displayPreferences.set(Int(selectedDisplayID), forKey: Self.preferredDisplayKey)
+        }
+    }
+    @Published private(set) var displayDiscoveryInProgress = false
+    @Published private(set) var displayError: String?
     @Published private(set) var state: CaptureState = .idle
     @Published var errorMessage: String?
     @Published private(set) var stats = CaptureStats()
@@ -34,26 +87,65 @@ final class CaptureController: ObservableObject {
     private var diagnosticsSessionID: String?
     private var analysisProcesses: [String: Process] = [:]
     private var analysisShutdownRequested = false
+    static let preferredDisplayKey = "ScholarsEyeSelectedDisplayID"
+    private let displayPreferences: UserDefaults
+    private let displayDiscovery: CaptureDisplayDiscovery
+    private var preferredDisplayID: UInt32?
+    private var applyingDiscoveredSelection = false
+    private var displayDiscoveryTask: Task<Void, Never>?
 
-    init(storageURL: URL) {
+    init(storageURL: URL, displayPreferences: UserDefaults = .standard,
+         displayDiscovery: CaptureDisplayDiscovery? = nil) {
         self.storageURL = storageURL
+        self.displayPreferences = displayPreferences
+        self.displayDiscovery = displayDiscovery ?? .system
+        if let stored = displayPreferences.object(forKey: Self.preferredDisplayKey) as? NSNumber {
+            preferredDisplayID = UInt32(exactly: stored.int64Value)
+        }
         refreshSessions()
     }
 
-    // ScreenCaptureKit can show a system permission dialog here. The UI invokes
-    // this only from an explicit Choose display / Start action.
-    func refreshDisplays() async {
-        do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            sourceDisplays = content.displays
-            displays = content.displays.enumerated().map { index, display in
-                let name = NSScreen.screens.first {
-                    ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
-                }?.localizedName ?? "Display \(index + 1)"
-                return CaptureDisplay(id: display.displayID, name: name, width: display.width, height: display.height)
+    /// Automatic refreshes preflight permission so opening the app cannot show
+    /// a system prompt. Explicit refresh and Start may request screen access.
+    func refreshDisplays(requestPermission: Bool = true) async {
+        if let task = displayDiscoveryTask { await task.value; return }
+        guard requestPermission || displayDiscovery.hasScreenAccess() else {
+            // Display names and IDs are available without capture permission.
+            // Capture sources are still obtained only by an explicit action.
+            applyDisplaySnapshot(CaptureDisplaySnapshot(sources: [], displays: displayDiscovery.localDisplays()))
+            displayError = "Allow screen recording in System Settings → Privacy & Security → Screen & System Audio Recording."
+            return
+        }
+        displayDiscoveryInProgress = true
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.displayDiscoveryInProgress = false
+                self.displayDiscoveryTask = nil
             }
-            if !displays.contains(where: { $0.id == selectedDisplayID }) { selectedDisplayID = displays.first?.id }
-        } catch { errorMessage = "Screen access is unavailable: \(error.localizedDescription). Enable ScholarsEye in System Settings → Privacy & Security → Screen & System Audio Recording, then try again." }
+            do {
+                let snapshot = try await self.displayDiscovery.load()
+                self.applyDisplaySnapshot(snapshot)
+                self.displayError = snapshot.displays.isEmpty ? "No display is available. Connect a display and try again." : nil
+            } catch {
+                // Keep the last known choices on transient discovery failures.
+                self.displayError = "Screen access is unavailable: \(error.localizedDescription). Enable ScholarsEye in System Settings → Privacy & Security → Screen & System Audio Recording, then try again."
+            }
+        }
+        displayDiscoveryTask = task
+        await task.value
+    }
+
+    private func applyDisplaySnapshot(_ snapshot: CaptureDisplaySnapshot) {
+        sourceDisplays = snapshot.sources
+        displays = snapshot.displays
+        let selection = CaptureDisplaySelection.choose(available: snapshot.displays.map(\.id),
+            selected: selectedDisplayID, preferred: preferredDisplayID, main: displayDiscovery.mainDisplayID())
+        // A disconnected display should not erase the user's saved preference
+        // while temporarily choosing an available screen.
+        applyingDiscoveredSelection = true
+        selectedDisplayID = selection
+        applyingDiscoveredSelection = false
     }
 
     func start(configuration: CaptureConfiguration) async {
@@ -72,9 +164,12 @@ final class CaptureController: ObservableObject {
                 guard allowed else { throw CaptureError.message("Microphone access was denied. Enable it in System Settings → Privacy & Security → Microphone, or turn microphone recording off.") }
                 guard AVCaptureDevice.default(for: .audio) != nil else { throw CaptureError.message("No microphone is available. Connect a microphone or turn microphone recording off.") }
             }
-            if sourceDisplays.isEmpty { await refreshDisplays() }
+            // A connected display's capture source can change while another
+            // recording is running. Resolve fresh sources for every new session.
+            await refreshDisplays()
+            if let displayError { throw CaptureError.message(displayError) }
             guard let display = sourceDisplays.first(where: { $0.displayID == selectedDisplayID }) else {
-                throw CaptureError.message(errorMessage ?? "No display is available. Choose a display and allow screen recording in System Settings.")
+                throw CaptureError.message(displayError ?? "No display is available. Allow screen recording in System Settings and try again.")
             }
             try FileManager.default.createDirectory(at: storageURL, withIntermediateDirectories: true)
             try Self.requireAvailableStorage(at: storageURL)

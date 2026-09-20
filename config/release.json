@@ -1,6 +1,6 @@
 {
-  "version": "0.3.3",
-  "build": "6",
+  "version": "0.3.4",
+  "build": "7",
   "githubRepository": "",
   "updateFeedURL": "https://github.com/calvinh99/ScholarsEye/releases/latest/download/appcast.xml",
   "publicEDKey": "h0GmGvfsDogduZp4DucGp/tumkMukOcwIxYBHsXe3NI="

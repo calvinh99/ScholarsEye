@@ -12,14 +12,14 @@ struct MainView: View {
     @ObservedObject var recorder: CaptureController
     @ObservedObject var updates: UpdateController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var microphone = true
-    @State private var systemAudio = false
-    @State private var compression = "Balanced"
-    @State private var codec: VideoCodec = .hevc
+    @AppStorage("recording.microphone") private var microphone = true
+    @AppStorage("recording.systemAudio") private var systemAudio = false
+    @AppStorage("recording.compression") private var compression = "Balanced"
+    @AppStorage("recording.codec") private var codec: VideoCodec = .hevc
     @State private var selectedSession: String?
     @State private var activeSessionID: String?
     @State private var busy = false
-    @State private var showSettings = false
+    @State private var page: NotebookPage = .sessions
     @State private var showDetails = false
     @State private var libraryDate = Date()
     @State private var pendingDeletion: RecordingSession?
@@ -29,6 +29,11 @@ struct MainView: View {
     @State private var analyzed: Set<String> = []
     @State private var savedDiagnostics: [String: RecordingDiagnosticsSnapshot] = [:]
 
+    private enum NotebookPage { case sessions, settings }
+
+    private var librarySessions: [RecordingSession] {
+        recorder.sessions.filter { !recording || $0.url != recorder.stats.sessionURL }
+    }
     private var recording: Bool { recorder.state != .idle }
     private var selected: RecordingSession? { recorder.sessions.first { $0.id == selectedSession } }
     private var unavailable: Bool { busy || recorder.operationInProgress }
@@ -38,21 +43,25 @@ struct MainView: View {
             sidebar
             Rectangle().fill(Paper.line).frame(width: 1)
             VStack(spacing: 0) {
-                breadcrumb
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        if let session = selected, !recording {
-                            sessionDetail(session)
-                        } else {
-                            captureView
+                toolbar
+                if page == .settings {
+                    settingsPage
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 22) {
+                            if let session = selected { sessionDetail(session) }
+                            else { emptyLibrary }
                         }
-                        if let error = recorder.errorMessage { errorNotice(error) }
+                        .frame(maxWidth: 840)
+                        .padding(.horizontal, 36).padding(.top, 26).padding(.bottom, 28)
+                        .frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: 840)
-                    .padding(.horizontal, 36).padding(.top, 26).padding(.bottom, 28)
-                    .frame(maxWidth: .infinity)
                 }
-            }.background(.white)
+                if let error = recorder.errorMessage {
+                    errorNotice(error).padding(.horizontal, 28).padding(.bottom, 16)
+                }
+                if recording { recordingActivity }
+            }.background(Color(nsColor: .textBackgroundColor))
         }
         .foregroundStyle(Paper.ink)
         .frame(minWidth: 940, minHeight: 700)
@@ -61,15 +70,24 @@ struct MainView: View {
         .onAppear {
             libraryDate = Date()
             recorder.refreshSessions()
+            if selectedSession == nil { selectedSession = librarySessions.first?.id }
+            if recording { activeSessionID = recorder.stats.sessionURL?.lastPathComponent }
             for session in recorder.sessions {
                 analysisMessages[session.id] = reportSummary(session.url)
             }
+        }
+        .task { if !recording { await recorder.refreshDisplays(requestPermission: false) } }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            if !recording { Task { await recorder.refreshDisplays(requestPermission: false) } }
         }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in libraryDate = Date() }
         .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in libraryDate = Date() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             libraryDate = Date()
-            if !recording && !unavailable { recorder.refreshSessions() }
+            if !recording && !unavailable {
+                recorder.refreshSessions()
+                Task { await recorder.refreshDisplays(requestPermission: false) }
+            }
         }
         .alert("Move session to Trash?", isPresented: $showDeletionConfirmation, presenting: pendingDeletion) { session in
             Button("Cancel", role: .cancel) { pendingDeletion = nil }
@@ -80,17 +98,21 @@ struct MainView: View {
         .alert("Couldn’t delete session", isPresented: Binding(get: { deletionError != nil }, set: { if !$0 { deletionError = nil } })) {
             Button("OK", role: .cancel) { deletionError = nil }
         } message: { Text(deletionError ?? "") }
+        .onChange(of: librarySessions.map(\.id)) { _, ids in
+            if !ids.contains(where: { $0 == selectedSession }) { selectedSession = ids.first }
+        }
         .onChange(of: selectedSession) { _, _ in
             showDetails = false
             loadSelectedDiagnostics()
         }
         .onChange(of: recorder.state) { _, state in
+            if state == .idle { Task { await recorder.refreshDisplays(requestPermission: false) } }
             if state == .recording {
                 activeSessionID = recorder.stats.sessionURL?.lastPathComponent
             } else if state == .idle, let id = activeSessionID {
                 recorder.refreshSessions()
                 if let session = recorder.sessions.first(where: { $0.id == id }) {
-                    selectedSession = id
+                    if selectedSession == nil { selectedSession = id }
                     if let snapshot = recorder.diagnostics, snapshot.sessionID == id {
                         savedDiagnostics[id] = snapshot
                     }
@@ -109,28 +131,19 @@ struct MainView: View {
                 Text("ScholarsEye").font(.system(size: 17, weight: .semibold))
             }.padding(.horizontal, 20).padding(.top, 28).padding(.bottom, 27)
 
-            Button {
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { selectedSession = nil }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "plus").font(.system(size: 15, weight: .medium)).frame(width: 18, height: 18)
-                    Text(recording ? "Current session" : "New session").fontWeight(.medium)
+            Button { page = .sessions } label: {
+                HStack {
+                    Text("Sessions")
                     Spacer()
-                }.padding(.horizontal, 12).padding(.vertical, 10)
-                    .background(selectedSession == nil ? Color.black.opacity(0.055) : .clear, in: RoundedRectangle(cornerRadius: 6))
-            }.buttonStyle(NotebookRowStyle()).padding(.horizontal, 10)
-                .help(recording ? "Return to the recording" : "Record a new learning session")
-
-            HStack {
-                Text("Sessions")
-                Spacer()
-                Text("\(recorder.sessions.count)").monospacedDigit()
-            }.font(.system(size: 11, weight: .medium)).foregroundStyle(Paper.muted)
-                .padding(.horizontal, 22).padding(.top, 31).padding(.bottom, 12)
+                    Text("\(librarySessions.count)").monospacedDigit()
+                }.font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(page == .sessions ? Paper.ink : Paper.muted)
+                    .padding(.horizontal, 22).padding(.vertical, 12)
+            }.buttonStyle(NotebookRowStyle()).accessibilityLabel("Show sessions").help("Show sessions")
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 3) {
-                    ForEach(SessionLibrary.groups(for: recorder.sessions, now: libraryDate)) { group in
+                    ForEach(SessionLibrary.groups(for: librarySessions, now: libraryDate)) { group in
                         Section {
                             ForEach(group.sessions) { session in sessionRow(session) }
                         } header: {
@@ -140,21 +153,22 @@ struct MainView: View {
                                 .accessibilityAddTraits(.isHeader)
                         }
                     }
-                    if recorder.sessions.isEmpty {
-                        Text("A fresh page.").font(.system(size: 12)).foregroundStyle(Paper.muted)
+                    if librarySessions.isEmpty {
+                        Text("No saved sessions").font(.system(size: 12)).foregroundStyle(Paper.muted)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(12)
                     }
                 }.padding(.horizontal, 10)
             }
             Spacer(minLength: 12)
             HStack(spacing: 8) {
-                Button { showSettings.toggle() } label: {
+                Button { page = .settings; showDetails = false } label: {
                     Label("Settings", systemImage: "gearshape")
                         .font(.system(size: 11)).foregroundStyle(Paper.muted)
-                        .padding(.vertical, 8)
+                        .fontWeight(page == .settings ? .semibold : .regular)
+                        .padding(.horizontal, 9).padding(.vertical, 8)
+                        .background(page == .settings ? Color.black.opacity(0.065) : .clear, in: RoundedRectangle(cornerRadius: 6))
                 }.buttonStyle(NotebookRowStyle()).help("Settings (⌘,)")
                     .keyboardShortcut(",", modifiers: .command)
-                    .popover(isPresented: $showSettings, arrowEdge: .leading) { settings }
                 Spacer()
                 UpdateStatusView(updates: updates, recording: recording || recorder.operationInProgress)
             }.padding(.horizontal, 22).padding(.bottom, 20)
@@ -163,17 +177,17 @@ struct MainView: View {
 
     private func sessionRow(_ session: RecordingSession) -> some View {
         Button {
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { selectedSession = session.id }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { page = .sessions; selectedSession = session.id }
         } label: {
             VStack(alignment: .leading, spacing: 5) {
                 Text(session.startedAt.formatted(date: .omitted, time: .shortened))
-                    .font(.system(size: 12, weight: selectedSession == session.id ? .semibold : .regular))
+                    .font(.system(size: 12, weight: page == .sessions && selectedSession == session.id ? .semibold : .regular))
                 Text(session.status == "recording" || session.status == "paused" ? "In progress" : "\(duration(session.durationSeconds)) · \(bytes(session.bytesWritten))")
                     .font(.system(size: 10)).foregroundStyle(Paper.muted)
             }.padding(.horizontal, 12).padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(selectedSession == session.id ? Color.black.opacity(0.065) : .clear, in: RoundedRectangle(cornerRadius: 6))
-        }.buttonStyle(NotebookRowStyle()).disabled(recording)
+                .background(page == .sessions && selectedSession == session.id ? Color.black.opacity(0.065) : .clear, in: RoundedRectangle(cornerRadius: 6))
+        }.buttonStyle(NotebookRowStyle())
             .accessibilityLabel("Session \(session.startedAt.formatted(date: .abbreviated, time: .shortened)), \(duration(session.durationSeconds))")
             .contextMenu { sessionActions(session) }
     }
@@ -190,131 +204,139 @@ struct MainView: View {
         }.disabled(recording || unavailable || recorder.analyzingSessionIDs.contains(session.id) || updates.blocksRecording)
     }
 
-    private var breadcrumb: some View {
-        HStack(spacing: 8) {
-            Text(selected != nil && !recording ? "Sessions" : "New session")
-            if let session = selected, !recording {
-                Text("/").foregroundStyle(.tertiary)
-                Text(session.startedAt.formatted(.dateTime.month(.abbreviated).day()))
-            }
-            Spacer()
-            if recording {
-                Circle().fill(recorder.state == .recording ? Color(red: 0.82, green: 0.28, blue: 0.22) : Paper.muted).frame(width: 6, height: 6)
-                Text(recorder.state == .paused ? "Paused" : recorder.state == .stopping ? "Saving…" : "Recording")
-            }
-        }.font(.system(size: 11)).foregroundStyle(Paper.muted)
-            .padding(.horizontal, 28).frame(height: 52)
+    private var toolbar: some View {
+        HStack(spacing: 16) {
+            HStack(spacing: 8) {
+                Text(page == .settings ? "Settings" : "Sessions")
+                if page == .sessions, let session = selected {
+                    Text("/").foregroundStyle(.tertiary)
+                    Text(session.startedAt.formatted(.dateTime.month(.abbreviated).day()))
+                }
+            }.font(.system(size: 11)).foregroundStyle(Paper.muted).lineLimit(1)
+            Spacer(minLength: 8)
+            RecordingControls(state: recorder.state, elapsed: recorder.stats.durationSeconds,
+                              busy: unavailable, updateInProgress: updates.blocksRecording,
+                              start: startRecording,
+                              pauseOrResume: {
+                                  perform { if recorder.state == .paused { await recorder.resume() } else { await recorder.pause() } }
+                              },
+                              stop: { perform { await recorder.stop() } })
+        }.padding(.horizontal, 28).frame(height: 64)
             .overlay(alignment: .bottom) { Rectangle().fill(Paper.line.opacity(0.6)).frame(height: 1) }
     }
 
-    private var captureView: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(recording ? "A little more, remembered." : "Let’s learn something.")
-                        .font(.system(size: 29, weight: .bold)).tracking(-0.7)
-                    Text(recording ? "\(bytes(recorder.stats.bytesWritten)) saved on this Mac" : "Your screen. Your thinking. One place to come back to.")
-                        .font(.system(size: 12)).foregroundStyle(Paper.muted)
-                }
-                Spacer(minLength: 10)
-            }
+    private var emptyLibrary: some View {
+        VStack(spacing: 14) {
+            DoodleEye(blinking: !recording).frame(width: 70, height: 62).accessibilityHidden(true)
+            Text("No sessions yet").font(.system(size: 22, weight: .semibold))
+            Text(recording ? "Your session will appear here when you stop." : "Click Record whenever you’re ready to learn.")
+                .font(.system(size: 12)).foregroundStyle(Paper.muted)
+        }.frame(maxWidth: .infinity).padding(.vertical, 120)
+    }
 
-            VStack(spacing: 22) {
-                DoodleEye(blinking: !recording).frame(width: 116, height: 104)
-                    .accessibilityHidden(true).padding(.top, recording ? 17 : 35)
+    private var settingsPage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Settings").font(.system(size: 29, weight: .bold)).tracking(-0.7)
+                Spacer()
                 if recording {
-                    Text(duration(recorder.stats.durationSeconds)).font(.system(size: 53, weight: .regular, design: .monospaced)).tracking(-2)
-                        .contentTransition(.numericText()).accessibilityLabel("Recorded time \(duration(recorder.stats.durationSeconds))")
-                    HStack(spacing: 10) {
-                        Button {
-                            perform { if recorder.state == .paused { await recorder.resume() } else { await recorder.pause() } }
-                        } label: {
-                            Label(recorder.state == .paused ? "Resume" : "Pause", systemImage: recorder.state == .paused ? "play.fill" : "pause.fill")
-                                .frame(width: 95)
-                        }.buttonStyle(PaperButtonStyle()).disabled(unavailable || recorder.state == .stopping)
-                        Button { perform { await recorder.stop() } } label: {
-                            Label("Stop & save", systemImage: "stop.fill").frame(width: 116)
-                        }.buttonStyle(PaperButtonStyle(prominent: true)).disabled(unavailable || recorder.state == .stopping)
+                    Text("Stop recording to change these settings.")
+                        .font(.system(size: 11)).foregroundStyle(Paper.muted)
+                }
+            }.padding(.horizontal, 36).padding(.top, 26).padding(.bottom, 12)
+            Form {
+                Section("Recording") {
+                    HStack(spacing: 12) {
+                        Picker("Display", selection: $recorder.selectedDisplayID) {
+                            if recorder.displays.isEmpty {
+                                Text(recorder.displayDiscoveryInProgress ? "Loading displays…" : "Display unavailable").tag(Optional<UInt32>.none)
+                            }
+                            ForEach(recorder.displays) { display in
+                                Text(display.name).tag(Optional(display.id))
+                            }
+                        }.disabled(recorder.displays.isEmpty || recorder.displayDiscoveryInProgress)
+                        Button { Task { await recorder.refreshDisplays() } } label: {
+                            if recorder.displayDiscoveryInProgress { ProgressView().controlSize(.mini) }
+                            else { Image(systemName: "arrow.clockwise") }
+                        }.buttonStyle(.borderless).accessibilityLabel("Refresh displays").help("Refresh displays")
+                            .disabled(recorder.displayDiscoveryInProgress)
                     }
-                } else {
-                    HStack(spacing: 22) {
-                        Toggle("Microphone", isOn: $microphone).toggleStyle(.checkbox)
-                        Toggle("System audio", isOn: $systemAudio).toggleStyle(.checkbox)
-                    }.font(.system(size: 12)).disabled(unavailable)
-                    Button {
-                        guard !updates.blocksRecording else { return }
-                        selectedSession = nil
-                        perform {
-                            guard !updates.blocksRecording else { return }
-                            await recorder.start(configuration: configuration)
+                    if let error = recorder.displayError {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(error).font(.system(size: 11)).foregroundStyle(.secondary)
+                            Button("Enable screen access") { Task { await recorder.refreshDisplays() } }
+                                .buttonStyle(.link).disabled(recorder.displayDiscoveryInProgress)
                         }
-                    } label: {
-                        HStack(spacing: 9) {
-                            if unavailable { ProgressView().controlSize(.small).colorScheme(.dark) }
-                            else { Circle().fill(Color.white).frame(width: 8, height: 8) }
-                            Text(unavailable ? "Starting…" : "Start recording").fontWeight(.medium)
-                        }.frame(width: 188)
-                    }.buttonStyle(PaperButtonStyle(prominent: true)).disabled(unavailable || updates.blocksRecording)
-                        .help(updates.blocksRecording ? "Wait for the update to finish before recording." : "Start a learning session")
-                    Text("1 fps  ·  \(codec == .hevc ? "HEVC" : "H.264")  ·  \(compression.lowercased())")
-                        .font(.system(size: 10)).foregroundStyle(Paper.muted)
-                }
-            }.frame(maxWidth: .infinity).padding(.bottom, 29)
-                .background(Paper.sidebar.opacity(0.48), in: RoundedRectangle(cornerRadius: 10))
-                .overlay { RoundedRectangle(cornerRadius: 10).stroke(Paper.line, lineWidth: 1) }
+                    }
+                    Toggle("Microphone", isOn: $microphone)
+                    Toggle("System audio", isOn: $systemAudio)
+                }.disabled(recording || unavailable)
 
-            if recording {
-                DiagnosticsPanel(snapshot: recorder.diagnostics, isLive: recorder.state == .recording)
-                if recorder.stats.droppedAudioSamples > 0 || recorder.stats.droppedVideoFrames > 0 {
-                    Label("Capture samples were dropped. Check this session after saving.", systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 12)).foregroundStyle(.orange)
+                Section {
+                    Picker("Compression", selection: $compression) {
+                        Text("Compact").tag("Compact")
+                        Text("Balanced").tag("Balanced")
+                        Text("More detail").tag("More detail")
+                    }.pickerStyle(.segmented)
+                    Picker("Format", selection: $codec) {
+                        Text("HEVC · smaller files").tag(VideoCodec.hevc)
+                        Text("H.264 · compatible").tag(VideoCodec.h264)
+                    }
+                } header: { Text("Quality") }
+                  footer: { Text("1 frame per second. Audio stays continuous.") }
+                  .disabled(recording || unavailable)
+
+                Section("Storage") {
+                    LabeledContent("Recordings") {
+                        Button("Open folder", systemImage: "arrow.up.right.square") {
+                            NSWorkspace.shared.open(recorder.storageURL)
+                        }.buttonStyle(.link).accessibilityLabel("Open recordings folder")
+                    }
+                    Text((recorder.storageURL.path as NSString).abbreviatingWithTildeInPath)
+                        .font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled)
                 }
-            }
-        }
+            }.formStyle(.grouped).scrollContentBackground(.hidden)
+                .toggleStyle(.switch).controlSize(.small)
+                .frame(maxWidth: 700, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 16)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .task { if !recording { await recorder.refreshDisplays(requestPermission: false) } }
     }
 
-    private var settings: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Settings").font(.system(size: 14, weight: .semibold))
-            recordingSettings.disabled(recording || unavailable)
-            Divider()
-            VStack(alignment: .leading, spacing: 9) {
-                Text("Storage").font(.system(size: 11)).foregroundStyle(Paper.muted)
-                Button("Open recordings folder", systemImage: "arrow.up.right.square") {
-                    NSWorkspace.shared.open(recorder.storageURL)
-                }.buttonStyle(.link)
-                Text((recorder.storageURL.path as NSString).abbreviatingWithTildeInPath)
-                    .font(.system(size: 10)).foregroundStyle(Paper.muted)
-                    .textSelection(.enabled).lineLimit(2).truncationMode(.middle)
+    private var recordingActivity: some View {
+        HStack(spacing: 20) {
+            Text(bytes(recorder.stats.bytesWritten) + " saved")
+                .foregroundStyle(Paper.muted).monospacedDigit()
+            Spacer(minLength: 0)
+            if let snapshot = recorder.diagnostics {
+                HStack(spacing: 7) {
+                    Text("CPU")
+                    Text(snapshot.averageCPUPercent.map { String(format: "%.1f%% avg", $0) } ?? "—").monospacedDigit()
+                    Sparkline(values: snapshot.samples.map { ($0.elapsedActiveSeconds, $0.cpuPercent) }).frame(width: 48, height: 18).accessibilityHidden(true)
+                }
+                HStack(spacing: 7) {
+                    Text("RAM")
+                    Text(snapshot.averageResidentBytes.map { String(format: "%.0f MiB avg", $0 / 1_048_576) } ?? "—").monospacedDigit()
+                    Sparkline(values: snapshot.samples.map { ($0.elapsedActiveSeconds, $0.residentBytes.map(Double.init)) }).frame(width: 48, height: 18).accessibilityHidden(true)
+                }
             }
-        }.font(.system(size: 12)).padding(22).frame(width: 340)
+            if recorder.stats.droppedVideoFrames > 0 || recorder.stats.droppedAudioSamples > 0 {
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                    .help("Some capture samples were dropped. Check this session after saving.")
+            }
+        }.font(.system(size: 10)).foregroundStyle(Paper.muted)
+            .padding(.horizontal, 28).frame(height: 44)
+            .background(Paper.sidebar.opacity(0.65))
+            .overlay(alignment: .top) { Rectangle().fill(Paper.line).frame(height: 1) }
+            .help("ScholarsEye process averages, excluding pauses. CPU: 100% equals one core. RAM: resident memory. Separate system capture and encoder services are excluded.")
     }
 
-    private var recordingSettings: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Compression").font(.system(size: 11)).foregroundStyle(Paper.muted)
-                Picker("Compression", selection: $compression) {
-                    Text("Compact").tag("Compact")
-                    Text("Balanced").tag("Balanced")
-                    Text("More detail").tag("More detail")
-                }.labelsHidden().pickerStyle(.segmented)
-            }
-            Picker("Format", selection: $codec) {
-                Text("HEVC · smaller files").tag(VideoCodec.hevc)
-                Text("H.264 · compatible").tag(VideoCodec.h264)
-            }
-            HStack {
-                Text("Display")
-                if !recorder.displays.isEmpty {
-                    Picker("Display", selection: $recorder.selectedDisplayID) {
-                        ForEach(recorder.displays) { display in Text(display.name).tag(Optional(display.id)) }
-                    }.labelsHidden()
-                }
-                Spacer(minLength: 0)
-                Button(recorder.displays.isEmpty ? "Choose…" : "Refresh") { perform { await recorder.refreshDisplays() } }
-            }
-            Text("1 frame per second. Audio stays continuous.").font(.system(size: 10)).foregroundStyle(Paper.muted)
+    private func startRecording() {
+        guard !updates.blocksRecording, !unavailable, !recording else { return }
+        let settings = configuration
+        perform {
+            guard !updates.blocksRecording else { return }
+            await recorder.start(configuration: settings)
         }
     }
 
@@ -551,17 +573,6 @@ private struct Sparkline: View {
                 }
             }
         }
-    }
-}
-
-private struct PaperButtonStyle: ButtonStyle {
-    var prominent = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(size: 12)).padding(.horizontal, 16).padding(.vertical, 12)
-            .foregroundStyle(prominent ? .white : Paper.ink)
-            .background(prominent ? Paper.ink.opacity(configuration.isPressed ? 0.78 : 1) : Color.white, in: RoundedRectangle(cornerRadius: 7))
-            .overlay { RoundedRectangle(cornerRadius: 7).stroke(prominent ? .clear : Paper.line, lineWidth: 1) }
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
     }
 }
 
